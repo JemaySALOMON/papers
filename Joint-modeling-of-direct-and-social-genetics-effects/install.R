@@ -10,7 +10,6 @@ pkgs  <- c(
   "grid", "tidyr", "ggExtra", "here", "scrm",
   "plotly", "data.table", "lme4", "car", "remotes",
   "devtools", "ggpubr")
-
 pkgs <- unique(pkgs)
 
 # Install packages and handle errors
