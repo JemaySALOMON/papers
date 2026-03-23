@@ -1,0 +1,90 @@
+ on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'Joint-modeling-of-direct-and-social-genetics-effects/**'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'Joint-modeling-of-direct-and-social-genetics-effects/**'
+
+ name: test-paper1.yaml
+ permissions: read-all
+
+ jobs:
+  test-paper1:
+    runs-on: ${{ matrix.config.os }}
+    name: ${{ matrix.config.os }} (${{ matrix.config.r }}) 
+
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - {os: ubuntu-latest, r: 'release'}
+          - {os: windows-latest, r: 'oldrel'}
+          - {os: windows-latest, r: 'release'}
+          - {os: windows-latest, r: 'devel'}
+          - {os: macos-latest, r: 'release'}
+          
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      R_KEEP_PKG_SOURCE: yes
+      PAPER_DIR: 'Joint-modeling-of-direct-and-social-genetics-effects'
+      R_REMOTES_NO_ERRORS_FROM_WARNINGS: true
+      ## avoid over-parallelization
+      OPENBLAS_NUM_THREADS: 1
+      OMP_NUM_THREADS: 1
+
+    steps:
+      - name: Checkout repo 
+        uses: actions/checkout@v4
+        with:
+          lfs: true 
+
+      - name: Install dependencies for Linux
+        if: runner.os == 'Linux'
+        run: |
+          set -ex
+          sudo apt-get update
+          sudo apt-get install -y \
+            libcurl4-openssl-dev \
+            libssl-dev \
+            libxml2-dev \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            libpng-dev \
+            libtiff5-dev \
+            libjpeg-dev \
+            libharfbuzz-dev \
+            libfribidi-dev \
+            g++ \
+            make \
+            pkg-config \
+            pandoc
+
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+
+      - name: Setup Pandoc
+        uses: r-lib/actions/setup-pandoc@v2
+
+      - name: Install R packages for this paper 
+        run: Rscript "${{ env.PAPER_DIR }}/install.R"
+
+      - name: simulate the data 
+        run: Rscript -e "rmarkdown::render('${{ env.PAPER_DIR }}/R/simulPhenos.Rmd', output_dir='${{ env.PAPER_DIR }}/R')"
+
+      - name: Inference 
+        run: Rscript -e "rmarkdown::render('${{ env.PAPER_DIR }}/R/Inference.Rmd', output_dir='${{ env.PAPER_DIR }}/R')"
+
+      - name: Gather the results 
+        run: Rscript -e "rmarkdown::render('${{ env.PAPER_DIR }}/R/GatherResults.Rmd', output_dir='${{ env.PAPER_DIR }}/R')"
+      
+      - name: Reproduce main figures of the papers 
+        run: Rscript -e "rmarkdown::render('${{ env.PAPER_DIR }}/R/Plots.Rmd', output_dir='${{ env.PAPER_DIR }}/R')"
+
+      - name: Inference with K vs Inference with ID
+        run: Rscript -e "rmarkdown::render('${{ env.PAPER_DIR }}/R/InferwithK_vs_InferwithID.Rmd', output_dir='${{ env.PAPER_DIR }}/R')" 

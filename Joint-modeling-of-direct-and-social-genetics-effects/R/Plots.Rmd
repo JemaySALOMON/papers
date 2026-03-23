@@ -1,0 +1,1495 @@
+---
+title: "paper:plots"
+author: "J. Salomon"
+date: "`r format(Sys.time(), '%d/%m/%Y %H:%M:%S')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 6
+    number_sections: TRUE
+  pdf_document:
+    toc: true
+    toc_depth: 6
+    number_sections: TRUE
+abstract: |
+    This documents aims to do evaluation for simulate data
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r}
+rm(list = ls())
+```
+
+
+```{=html}
+<!--
+This R chunk, hidden in the output, is used to set up important options.
+-->
+```
+```{r, echo=FALSE}
+if(! "params" %in% ls())
+  params <- list(root.dir=NULL)
+suppressPackageStartupMessages(library(knitr))
+opts_chunk$set(echo=TRUE, warning=TRUE, message=TRUE, cache=FALSE,
+               fig.align="center", dev="svglite", root.dir=params$root.dir)
+opts_knit$set(progress=TRUE, verbose=TRUE)
+```
+
+# Preamble
+
+```{r}
+ projectDir <- here::here("Joint-modeling-of-direct-and-social-genetics-effects")  #choose your path
+# projectDir <- here::here("../")
+stopifnot(dir.exists(projectDir))
+srcDir <- file.path(projectDir, "src")
+stopifnot(dir.exists(srcDir))
+rDir <- file.path(projectDir, "R")
+stopifnot(dir.exists(rDir))
+```
+
+
+Dependencies:
+
+```{r}
+suppressPackageStartupMessages(library(ggpubr))
+suppressPackageStartupMessages(library(agricolae))
+suppressPackageStartupMessages(library(purrr))
+suppressPackageStartupMessages(library(gtools))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(plotly))
+suppressPackageStartupMessages(library(gridExtra))
+suppressPackageStartupMessages(library(grid))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(tidyr))
+suppressPackageStartupMessages(library(ggExtra))
+suppressPackageStartupMessages(library(data.table))
+source(file.path(srcDir, "utils.R"))
+
+```
+
+Execution time (see the appendix):
+
+```{r time_0}
+t0 <- proc.time()
+```
+
+
+# Paths:
+
+```{r}
+outDir <- file.path(projectDir, "data/S4-S8_withK") # change the path when simulated
+inferDir <- file.path(outDir, "infer")
+evalDir <- file.path(outDir, "eval")
+if(! dir.exists(evalDir))
+  stop("Error, folder 'eval' not found")
+tmbDir <- file.path(evalDir, "tmb")
+```
+
+
+# visualization parameters
+
+```{r}
+method ="pearson"
+propSIGVscenario <- c("S4", "S5", "S6", "S7", "S8") # need to be matched your current scenarios
+designs <- c("sole_only", "sole_inter_50", "inter_only")
+designs_colors <- c(sole_only = "blue", inter_only = "red", sole_inter_50 = "orange") 
+dat.color <- "black"; size = 0.5 
+
+# for axis
+custom_axis <- theme(
+  axis.text.x = element_text(
+    vjust = 0.5, hjust = 1,
+    face = "bold", size = 14
+  ),
+  axis.text.y = element_text(face = "bold", size = 14),
+  axis.title.x = element_text(face = "bold", size = 16),
+  axis.title.y = element_text(face = "bold", size = 16),
+  strip.text = element_text(face = "bold", size = 15),
+  plot.title = element_text(face = "bold", hjust = 0.5, size = 18)) 
+
+# for theme
+custom_theme <- theme_bw() + 
+  theme(
+    legend.key.size = unit(1, "cm"),     # make legend color boxes larger
+    legend.text = element_text(size = 20), # increase legend text size if needed
+    legend.title = element_text(size = 15), # optional: enlarge legend title
+    panel.border = element_rect(colour = "black", fill = NA, linewidth = 1),
+    plot.title = element_text(size = 12)
+  )
+
+width = 0.8
+```
+
+
+# Load data : parameters,  selection,  genetic values
+
+For each scenario, one hundred datasets (“replicates”) were simulated. The statistical framework was use to fit each of them. Estimation accuracy was assessed both at the level of (co)variance parameters as well as genetic values. For each (co)variance, the bias error between the estimated and true value was computed per replicate i (BEi = estimi - truei), then normalized using the true value (NBEi). For each replicate i, the correlation (both Pearson and Spearman) was computed between the empirical BLUPs of each kind of genetic values ($DBV$, $SBV$, $SIGV$, $BV^{SC}$, $BV^{IC}$).
+
+
+```{r}
+inFs <- Sys.glob(file.path(evalDir, "tmb", "*"))
+stopifnot(length(inFs)!=0)
+scenarios <- "all" 
+sep = "," 
+# ex. scenarios <- list.files(file.path(outDir, "infer"), pattern = "^S", full.names = FALSE)
+
+selection <- list()
+parameters <- list()
+geneticValues <- list()
+
+for(scenario in scenarios){
+  scenario_files <- inFs[grepl(paste0(scenario,"_"), inFs)]
+  selection_files <- scenario_files[grepl("selection", scenario_files)]
+  selection_data <- lapply(selection_files, read.csv, sep = sep, dec = ".", encoding = "UTF-8")
+  parameters_files <- scenario_files[grepl("parameters_raw", scenario_files)]
+  parameters_data <- lapply(parameters_files, read.csv, sep = sep, dec = ".", encoding = "UTF-8")
+  geneticValues_files <- scenario_files[grepl("genetic_values", scenario_files) &
+                                          !grepl("genetic_values_raw", scenario_files)]
+  geneticValues_data <- lapply(geneticValues_files, read.csv, sep = sep, dec = ".", encoding = "UTF-8")
+  
+  
+  selection[[scenario]] <- selection_data
+  parameters[[scenario]] <- parameters_data
+  geneticValues[[scenario]] <- geneticValues_data
+  
+}
+geneticValues <- do.call(rbind, unlist(geneticValues, recursive = FALSE))
+selection <- do.call(rbind, unlist(selection, recursive = FALSE))
+stopifnot(nrow(parameters)!=0)
+```
+
+
+
+
+# Format the data
+
+```{r}
+#renames old cols
+names(selection)[names(selection) == "tprEstimMix"] <- "tppEstimMix"
+names(geneticValues)[names(geneticValues) == "True_SIS"] <- "True_SIGV"
+names(geneticValues)[names(geneticValues) == "Estimated_SIS"] <- "Estimated_SIGV"
+# rbind and convert
+parameters <- do.call(rbind, unlist(parameters, recursive = FALSE))
+parameters$Parameter <- as.character(parameters$Parameter)
+parameters$Parameter <- gsub("cor_SIS", "cor_SIGV", parameters$Parameter)
+parameters$Parameter <- gsub("sigma2.SIS", "sigma2.SIGV", parameters$Parameter)
+parameters$Parameter <- gsub("Cor_U", "Cor_BV", parameters$Parameter)
+parameters$Parameter <- gsub("^sigma2_err_p$", "sigma2_err_p_mix", parameters$Parameter)
+selection <- convertCharacterColumnsToFactor(selection)
+parameters <- convertCharacterColumnsToFactor(parameters)
+
+#reset rownames
+rownames(selection)<-NULL
+rownames(parameters)<-NULL
+rownames(geneticValues)<-NULL
+
+#set software use
+parameters["fitWith"] <- "TMB"
+```
+
+```{r}
+parameters_designs = droplevels(parameters[parameters$Strategy %in%designs, ])
+parameters_designs$Strategy <- factor(parameters_designs$Strategy,levels = designs)
+
+selectionSIS <- droplevels(selection[selection$Scenario %in%propSIGVscenario, ])
+selectionSIS$propSIGV <- selectionSIS$Scenario
+
+parametersSIGV <- droplevels(parameters[parameters$Scenario%in%propSIGVscenario, ])
+parametersSIGV$propSIGV <-parametersSIGV$Scenario
+
+```
+
+```{r}
+propSIGVval<- c("S4" = 0.1, "S5" = 0.20, "S6" = 0.30, "S7"=0.4, "S8"=0.5) # need to be matched your current scenarios
+parametersSIGV<- parametersSIGV %>%
+  dplyr::mutate(propSIGV = dplyr::recode(propSIGV, !!!propSIGVval))
+parametersSIGV$propSIGV <- as.numeric(parametersSIGV$propSIGV)
+selectionSIS <- selectionSIS %>%
+  dplyr::mutate(propSIGV = dplyr::recode(propSIGV, !!!propSIGVval))
+selectionSIS$propSIGV <- as.numeric(selectionSIS$propSIGV)
+unique(selectionSIS$Scenario)
+```
+
+```{r}
+varcovar <- geneticValues %>%
+  group_by(Scenario, SimulID, Strategy) %>%
+  summarise(
+    True_var_DBV  = round(var(True_DBV, na.rm = TRUE), 2),
+    True_var_SBV  = round(var(True_SBV, na.rm = TRUE), 2),
+    True_var_SIGV  = round(var(True_SIGV, na.rm = TRUE), 2),
+    True_var_cBV  = round(var(True_SIGV) + var(True_DBV), 2),
+    True_cor_DBV_x_SBV = round(cor(True_DBV, True_SBV, use = "complete.obs", method = "pearson"), 2),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    True_var_DBV_SBV =
+      True_var_DBV + True_var_SBV +
+        2 * True_cor_DBV_x_SBV * sqrt(True_var_DBV) * sqrt(True_var_SBV)
+  )
+parametersSIGV <- parametersSIGV %>%
+  dplyr::left_join(varcovar, by = c("Scenario", "SimulID", "Strategy"))
+```
+
+
+# Figure 3  and  Suppl Fig. 6
+
+
+format  $\sigma^2_{BV^{SC}}$
+
+```{r}
+## forma the data
+pd <- position_dodge(0.5)
+dat <- droplevels(parametersSIGV[(parametersSIGV$Strategy %in% c("sole_inter_50", "sole_only", "inter_only") & 
+                          parametersSIGV$Parameter %in% c("sigma2.cBV", "sigma2.SIGV","sigma2.DBV")),  ])
+tmp <- droplevels(dat[dat$Strategy=="sole_inter_50", ])
+tmp2 <- tmp %>%
+  dplyr::group_by(Scenario, SimulID, Strategy, fitWith, propSIGV) %>%
+  dplyr::summarise(
+    True      = sum(as.numeric(True[Parameter %in% c("sigma2.DBV", "sigma2.SIGV")])),
+    Estimated = sum(as.numeric(Estimated[Parameter %in% c("sigma2.DBV", "sigma2.SIGV")])),
+    .groups = "drop"
+  ) %>%
+  left_join(
+    tmp %>% 
+      filter(Parameter == "sigma2.DBV") %>%
+      select(-Estimated, -Parameter, -True),  # <--- retirer True
+    by = c("Scenario","SimulID","Strategy","fitWith","propSIGV")
+  ) %>%
+  mutate(Parameter = "sigma2.cBV")
+
+tmp3 <- bind_rows(tmp, tmp2) %>%
+  arrange(Scenario, SimulID, Strategy, propSIGV, Parameter)
+dat <- rbind(tmp3, dat)
+rownames(dat) <- NULL
+```
+
+```{r}
+tmp <- droplevels(dat[dat$Parameter=="sigma2.DBV" & dat$Strategy=="inter_only" , ])
+dat <- droplevels(dat[dat$Parameter=="sigma2.cBV" , ])
+dat <- rbind(tmp, dat)
+```
+
+```{r}
+colsToKeep <- c("Scenario", "SimulID", "Strategy", "propSIGV","BE", "NBE", "pNBE")
+```
+
+```{r}
+## forma the data
+dat$BE <- (dat$Estimated-dat$True_var_cBV)
+dat$NBE <- round((dat$Estimated-dat$True_var_cBV)/dat$True_var_cBV, 2)
+dat$pNBE <- ((dat$Estimated-dat$True_var_cBV)/dat$True_var_cBV)*100
+summary_stats <- dat %>%
+  dplyr::group_by(propSIGV, Strategy) %>%
+  dplyr::summarise(
+    mean_sigma2.cBV = mean(Estimated, na.rm = TRUE),
+    sd_sigma2.cBV = sd(Estimated, na.rm = TRUE),
+    
+    mean_NBE.bvsc = mean(NBE, na.rm = TRUE),
+    
+    CI_sigma2_low = quantile(Estimated, probs = 0.025, na.rm = TRUE),
+    CI_sigma2_high = quantile(Estimated, probs = 0.975, na.rm = TRUE),
+    
+    CI_NBE_low = quantile(NBE, probs = 0.025, na.rm = TRUE),
+    CI_NBE_high = quantile(NBE, probs = 0.975, na.rm = TRUE),
+    .groups = "drop_last")
+
+datbvsc <- dat[, colsToKeep]
+datbvsc$parameter <-"var_cBV"
+```
+
+
+format  $\sigma^2_{BV^{IC}}$
+
+```{r}
+## forma the data
+pd <- position_dodge(0.5)
+dat <- droplevels(parametersSIGV[
+  parametersSIGV$Strategy %in% c("sole_inter_50", "sole_only", "inter_only") &
+  parametersSIGV$Parameter %in% c("sigma2.cBV", "sigma2.SIGV","sigma2.DBV", "sigma2.SBV", "Cor_BV"),
+])
+
+tmp <- droplevels(dat[dat$Strategy %in% c("sole_inter_50","inter_only"), ])
+
+cor_table <- tmp %>%
+  filter(Parameter == "Cor_BV") %>%
+  select(Scenario, SimulID, Strategy, fitWith, propSIGV,
+         Estimated) %>%
+  rename(Estimated_Cor_BV = Estimated)
+
+tmp2 <- tmp %>%
+  filter(Parameter %in% c("sigma2.DBV", "sigma2.SBV")) %>%
+  select(Scenario, SimulID, Strategy, fitWith, propSIGV,
+         Parameter, True, Estimated, True_cor_DBV_x_SBV) %>%
+  tidyr::pivot_wider(
+    names_from = Parameter,
+    values_from = c(True, Estimated),
+    names_glue = "{.value}_{Parameter}"
+  ) %>%
+  left_join(cor_table, 
+            by = c("Scenario","SimulID","Strategy","fitWith","propSIGV")) %>%  
+  mutate(
+    True =
+      True_sigma2.DBV +
+      True_sigma2.SBV +
+      2 * True_cor_DBV_x_SBV *
+        sqrt(True_sigma2.DBV) * sqrt(True_sigma2.SBV),
+    Estimated =
+      Estimated_sigma2.DBV +
+      Estimated_sigma2.SBV +
+      2 * Estimated_Cor_BV * 
+        sqrt(Estimated_sigma2.DBV) *
+        sqrt(Estimated_sigma2.SBV),
+
+    Parameter = "sigma2.DBV_SBV"
+  ) %>%
+  select(Scenario, SimulID, Strategy, fitWith, propSIGV,
+         Parameter, True, Estimated)
+
+tmp3 <- bind_rows(tmp, tmp2) %>%
+  arrange(Scenario, SimulID, Strategy, propSIGV, Parameter)
+
+dat <- bind_rows(tmp3, dat)
+rownames(dat) <- NULL
+```
+
+
+```{r}
+dat <- dat %>%
+  group_by(Scenario, SimulID) %>%
+  mutate(True_var_DBV_SBV = ifelse(is.na(True_var_DBV_SBV), 
+                                   True_var_DBV_SBV[!is.na(True_var_DBV_SBV)][1],
+                                   True_var_DBV_SBV)) %>%ungroup()
+```
+
+
+```{r}
+tmp <- droplevels(dat[dat$Parameter=="sigma2.DBV_SBV" & 
+                  dat$Strategy%in%c("inter_only", "sole_inter_50") , ])
+dat <- droplevels(dat[dat$Parameter=="sigma2.cBV" , ])
+
+dat <- rbind(tmp, dat)
+
+colsToKeep <- c("Scenario", "SimulID", "Strategy", "propSIGV","BE", "NBE", "pNBE")
+dat$BE <- (dat$Estimated-dat$True_var_DBV_SBV)
+dat$NBE <- round((dat$Estimated-dat$True_var_DBV_SBV)/dat$True_var_DBV_SBV, 2)
+dat$pNBE <- ((dat$Estimated-dat$True_var_DBV_SBV)/dat$True_var_DBV_SBV)*100
+
+summary_stats <- dat %>%
+  dplyr::group_by(propSIGV, Strategy) %>%
+  dplyr::summarise(
+    mean_sigma2.DBV_SBV = mean(Estimated, na.rm = TRUE),
+    sd_sigma2.DBV_SBV = sd(Estimated, na.rm = TRUE),
+    
+    mean_NBE.DBV_SBV= mean(NBE, na.rm = TRUE),
+    
+    CI_sigma2_low = quantile(Estimated, probs = 0.025, na.rm = TRUE),
+    CI_sigma2_high = quantile(Estimated, probs = 0.975, na.rm = TRUE),
+    
+    CI_NBE_low = quantile(NBE, probs = 0.025, na.rm = TRUE),
+    CI_NBE_high = quantile(NBE, probs = 0.975, na.rm = TRUE),
+    .groups = "drop_last")
+
+dat_DBV_SBV <- dat[, colsToKeep]
+dat_DBV_SBV$parameter <-"var_DBV_SBV"
+
+```
+
+
+
+ format  $\sigma^2_{DBV}$
+
+```{r}
+pd <- position_dodge(0.5)
+tmp <- droplevels(parametersSIGV[parametersSIGV$Parameter=="sigma2.cBV"  & 
+                                     parametersSIGV$Strategy=="sole_only" , ])
+dat <- droplevels(parametersSIGV[parametersSIGV$Parameter=="sigma2.DBV" , ])
+dat <- rbind(dat, tmp)
+```
+
+```{r}
+dat$BE <- (dat$Estimated-dat$True_var_DBV)
+dat$NBE <- round((dat$Estimated-dat$True_var_DBV)/dat$True_var_DBV, 2)
+dat$pNBE <- ((dat$Estimated-dat$True_var_DBV)/dat$True_var_DBV)*100
+
+summary_stats <- dat %>%
+  dplyr::group_by(propSIGV, Strategy) %>%
+
+  summarise(
+    mean_sigma2.DBV = mean(Estimated, na.rm = TRUE),
+    sd_sigma2.DBV = sd(Estimated, na.rm = TRUE),
+    
+    mean_NBE.DBV = mean(NBE, na.rm = TRUE),
+    CI_sigma2_low = quantile(Estimated, probs = 0.025, na.rm = TRUE),
+    CI_sigma2_high = quantile(Estimated, probs = 0.975, na.rm = TRUE),
+    
+    CI_NBE_low = quantile(NBE, probs = 0.025, na.rm = TRUE),
+    CI_NBE_high = quantile(NBE, probs = 0.975, na.rm = TRUE),
+  .groups = "drop_last")
+
+datDBV <- dat[, colsToKeep]
+datDBV$parameter <-"var_DBV"
+```
+
+
+format $\sigma^2_{SBV}$
+
+```{r}
+pd <- position_dodge(0.5)
+dat <- droplevels(parametersSIGV[parametersSIGV$Parameter=="sigma2.SBV" , ])
+```
+
+```{r}
+
+dat$BE <- (dat$Estimated-dat$True_var_SBV)
+dat$NBE <- round((dat$Estimated-dat$True_var_SBV)/dat$True_var_SBV, 2)
+dat$pNBE <- ((dat$Estimated-dat$True_var_SBV)/dat$True_var_SBV)*100
+
+summary_stats <- dat %>%
+  dplyr::group_by(propSIGV, Strategy, True) %>%
+  summarise(
+    mean_sigma2.SBV = mean(Estimated, na.rm = TRUE),
+    sd_sigma2.SBV = sd(Estimated, na.rm = TRUE),
+    mean_NBE.SBV = mean(NBE, na.rm = TRUE),
+    
+    CI_sigma2_low = quantile(Estimated, probs = 0.025, na.rm = TRUE),
+    CI_sigma2_high = quantile(Estimated, probs = 0.975, na.rm = TRUE),
+    
+    CI_NBE_low = quantile(NBE, probs = 0.025, na.rm = TRUE),
+    CI_NBE_high = quantile(NBE, probs = 0.975, na.rm = TRUE),
+    .groups = "drop_last")
+
+datSBV <- dat[, colsToKeep]
+datSBV$parameter <-"var_SBV"
+```
+
+format $\sigma^2_{SIGV}$
+
+```{r}
+pd <- position_dodge(0.5)
+dat <- droplevels(parametersSIGV[parametersSIGV$Parameter=="sigma2.SIGV", ])
+```
+
+```{r}
+
+dat$BE <- (dat$Estimated-dat$True_var_SIGV)
+dat$NBE <- round((dat$Estimated-dat$True_var_SIGV)/dat$True_var_SIGV, 2)
+dat$pNBE <- ((dat$Estimated-dat$True_var_SIGV)/dat$True_var_SIGV)*100
+
+summary_stats <- dat %>%
+  dplyr::group_by(propSIGV, Strategy, True) %>%
+  summarise(
+    mean_sigma2.SIGV = mean(Estimated, na.rm = TRUE),
+    sd_sigma2.SIGV = sd(Estimated, na.rm = TRUE),
+    
+    mean_NBE.SIGV = mean(NBE, na.rm = TRUE),
+    
+    CI_sigma2_low = quantile(Estimated, probs = 0.025, na.rm = TRUE),
+    CI_sigma2_high = quantile(Estimated, probs = 0.975, na.rm = TRUE),
+    
+    CI_NBE_low = quantile(NBE, probs = 0.025, na.rm = TRUE),
+    CI_NBE_high = quantile(NBE, probs = 0.975, na.rm = TRUE),
+   .groups = "drop_last" )
+
+datSIGV <- dat[, colsToKeep]
+datSIGV$parameter <-"var_SIGV"
+```
+
+
+
+format $\rho_{DBV-SBV}$
+
+```{r, fig.width=12, fig.height=8, warning = FALSE}
+pd <- position_dodge(0.5)
+dat <- droplevels(parametersSIGV[parametersSIGV$Parameter=="Cor_BV" , ])
+```
+
+```{r}
+
+dat$BE <- (dat$Estimated-dat$True_cor_DBV_x_SBV)
+dat$NBE <- round((dat$Estimated-dat$True_cor_DBV_x_SBV)/dat$True_cor_DBV_x_SBV, 2)
+dat$pNBE <- ((dat$Estimated-dat$True_cor_DBV_x_SBV)/dat$True_cor_DBV_x_SBV)*100
+
+summary_stats <- dat %>%
+  dplyr::group_by(propSIGV, Strategy, True) %>%
+  summarise(
+    mean_corU = mean(Estimated, na.rm = TRUE),
+    sd_corU = sd(Estimated, na.rm = TRUE),
+    
+    mean_NBE.corBV = mean(NBE, na.rm = TRUE),
+    
+    CI_sigma2_low = quantile(Estimated, probs = 0.025, na.rm = TRUE),
+    CI_sigma2_high = quantile(Estimated, probs = 0.975, na.rm = TRUE),
+    
+    CI_NBE_low = quantile(NBE, probs = 0.025, na.rm = TRUE),
+    CI_NBE_high = quantile(NBE, probs = 0.975, na.rm = TRUE),
+    .groups = "drop_last")
+
+datCorBV <- dat[, colsToKeep]
+datCorBV$parameter <-"Cor_BV"
+```
+
+format $\rho_{E}$
+
+```{r, fig.width=12, fig.height=8, warning = FALSE}
+
+pd <- position_dodge(0.1)
+dat <- droplevels(parametersSIGV[parametersSIGV$Parameter=="Cor_E" , ])
+
+dat$BE <- (dat$Estimated-dat$True)
+dat$NBE <- round((dat$Estimated-dat$True)/dat$True, 2)
+dat$pNBE <- ((dat$Estimated-dat$True)/dat$True)*100
+
+summary_stats <- dat %>%
+  dplyr::group_by(propSIGV, Strategy, True) %>%
+  summarise(
+    mean_err = mean(Estimated, na.rm = TRUE),
+    sd_err = sd(Estimated, na.rm = TRUE),
+    
+    mean_NBE.corE = round(mean(NBE, na.rm = TRUE), 2),
+    
+    CI_sigma2_low = quantile(Estimated, probs = 0.025, na.rm = TRUE),
+    CI_sigma2_high = quantile(Estimated, probs = 0.975, na.rm = TRUE),
+    
+    CI_NBE_low = quantile(NBE, probs = 0.025, na.rm = TRUE),
+    CI_NBE_high = quantile(NBE, probs = 0.975, na.rm = TRUE),
+    .groups = "drop_last" )
+
+datCorE <- dat[, colsToKeep]
+datCorE$parameter <- "Cor_E"
+```
+
+format $\sigma^2_{(e,f)^{SC}}$
+
+```{r, fig.width=12, fig.height=8, warning = FALSE}
+
+pd <- position_dodge(0.1)
+dat <- droplevels(parametersSIGV[parametersSIGV$Parameter=="sigma2_err_w" , ])
+
+dat$BE <- (dat$Estimated-dat$True)
+dat$NBE <- round((dat$Estimated-dat$True)/dat$True, 2)
+dat$pNBE <- ((dat$Estimated-dat$True)/dat$True)*100
+
+summary_stats <- dat %>%
+  dplyr::group_by(propSIGV, Strategy, True) %>%
+  summarise(
+    mean_err = mean(Estimated, na.rm = TRUE),
+    sd_err = sd(Estimated, na.rm = TRUE),
+    
+    mean_NBE.corBV = round(mean(NBE, na.rm = TRUE), 2),
+    
+    CI_sigma2_low = quantile(Estimated, probs = 0.025, na.rm = TRUE),
+    CI_sigma2_high = quantile(Estimated, probs = 0.975, na.rm = TRUE),
+    
+    CI_NBE_low = quantile(NBE, probs = 0.025, na.rm = TRUE),
+    CI_NBE_high = quantile(NBE, probs = 0.975, na.rm = TRUE),
+    .groups = "drop_last" )
+
+datSigma2ErrWPur <- dat[, colsToKeep]
+datSigma2ErrWPur$parameter <-"var_err_w_pur"
+```
+
+format $\sigma^2_{(e,f)^{IC}}$
+```{r}
+
+pd <- position_dodge(0.1)
+dat <- droplevels(parametersSIGV[parametersSIGV$Parameter=="sigma2_err_w_mix" , ])
+
+dat$BE <- (dat$Estimated-dat$True)
+dat$NBE <- round((dat$Estimated-dat$True)/dat$True, 2)
+dat$pNBE <- ((dat$Estimated-dat$True)/dat$True)*100
+
+summary_stats <- dat %>%
+  dplyr::group_by(propSIGV, Strategy, True) %>%
+  summarise(
+    mean_err = mean(Estimated, na.rm = TRUE),
+    sd_err = sd(Estimated, na.rm = TRUE),
+    
+    mean_NBE.sigma2_err_w_mix = round(mean(NBE, na.rm = TRUE), 2),
+    
+    CI_sigma2_low = quantile(Estimated, probs = 0.025, na.rm = TRUE),
+    CI_sigma2_high = quantile(Estimated, probs = 0.975, na.rm = TRUE),
+    
+    CI_NBE_low = quantile(NBE, probs = 0.025, na.rm = TRUE),
+    CI_NBE_high = quantile(NBE, probs = 0.975, na.rm = TRUE),
+     .groups = "drop_last")
+datSigma2ErrWMix <- dat[, colsToKeep]
+datSigma2ErrWMix$parameter <-"var_err_w_mix"
+table(datSigma2ErrWMix$Strategy, datSigma2ErrWMix$parameter)
+```
+
+
+format $\sigma^2_{(e,t)^{IC}}$
+
+```{r}
+pd <- position_dodge(0.1)
+dat <- droplevels(parametersSIGV[parametersSIGV$Parameter%in%c("sigma2_err_p_mix"),  ])
+
+dat$BE <- (dat$Estimated-dat$True)
+dat$NBE <- round((dat$Estimated-dat$True)/dat$True, 2)
+dat$pNBE <- ((dat$Estimated-dat$True)/dat$True)*100
+
+summary_stats <- dat %>%
+  dplyr::group_by(propSIGV, Strategy, True) %>%
+  summarise(
+    mean_err = mean(Estimated, na.rm = TRUE),
+    sd_err = sd(Estimated, na.rm = TRUE),
+    
+    mean_NBE.sigma2_err_p_mix = round(mean(NBE, na.rm = TRUE), 2),
+    
+    CI_sigma2_low = quantile(Estimated, probs = 0.025, na.rm = TRUE),
+    CI_sigma2_high = quantile(Estimated, probs = 0.975, na.rm = TRUE),
+    
+    CI_NBE_low = quantile(NBE, probs = 0.025, na.rm = TRUE),
+    CI_NBE_high = quantile(NBE, probs = 0.975, na.rm = TRUE),
+     .groups = "drop_last")
+
+datSigma2ErrPMix <- dat[, colsToKeep]
+datSigma2ErrPMix$parameter <-"var_err_p_mix"
+table(datSigma2ErrPMix$Strategy, datSigma2ErrPMix$parameter)
+```
+
+format combine data
+
+```{r}
+
+dat <- rbind(datbvsc, datDBV, datSBV, datSIGV, datCorBV, dat_DBV_SBV)
+dat <- droplevels(dat[!dat$propSIGV%in%c(0.2, 0.4),])
+dat$propSIGV <- as.factor(dat$propSIGV)
+dat$parameter <- factor(dat$parameter, levels = c("var_cBV", "var_DBV_SBV", 
+                                                  "var_DBV", "var_SBV", "Cor_BV", "var_SIGV"))
+
+dat$Strategy <- factor(dat$Strategy, levels = c("sole_only", "sole_inter_50", "inter_only"))
+parameter_labels <- c(
+  var_cBV  = "sigma[BV^SC]^2",
+  var_DBV_SBV  = "sigma[BV^IC]^2",
+  var_DBV  = "sigma[DBV]^2",
+  var_SBV  = "sigma[SBV]^2",
+    Cor_BV   = "rho[DS]",
+  var_SIGV = "sigma[SIGV]^2"
+)
+
+dat <- dat %>%
+  mutate(parameter = factor(parameter, levels = names(parameter_labels)))
+
+dat_means <- dat %>%
+  dplyr::group_by(parameter, Strategy, propSIGV) %>%
+  summarise(NBE = round(mean(NBE), 2), .groups = "drop") 
+
+```
+## Figure 3
+
+Figure 3: Estimation accuracy (normalized biased error on the y-axis, one dot per simulation) of genetic (co)variances for the focal species, under varying levels of SIGV variance (x-axis) and var(SBV) = 20% var(DBV) . ⓧ marks cases where the bias is significantly greater than 15 % of the mean (|NBE| ≥ 0.15) . 
+
+
+```{r, fig.width=12, fig.height=8, warning = FALSE}
+d <- 0.6
+#--------------------------------------------------
+# 1. Calcul des t-tests + étoiles + position y
+#--------------------------------------------------
+stat_test <- dat %>%
+  group_by(parameter, Strategy, propSIGV) %>%
+  summarise(
+    n = n(),
+    max_y = max(NBE[is.finite(NBE)], na.rm = TRUE),
+
+    t_high = list(if(n() >= 100) t.test(NBE, mu = 0.15, 
+                                        alternative = "greater",  
+                                        conf.level = 0.975) else NA),
+    
+    t_low  = list(if(n() >= 100) t.test(NBE, mu = -0.15, 
+                                        alternative = "less",
+                                         conf.level = 0.975) else NA),
+
+    .groups = "drop"
+  ) %>%
+  mutate(
+    p_high = map_dbl(t_high, ~ if(is.list(.x)) .x$p.value else NA_real_),
+    p_low  = map_dbl(t_low,  ~ if(is.list(.x)) .x$p.value else NA_real_),
+
+    # p-value la plus forte évidence
+    p.value = pmin(p_high, p_low, na.rm = TRUE),
+
+    signif = case_when(
+      n < 100         ~ "n<100",
+      p.value < 0.05  ~ "ⓧ",
+      TRUE            ~ ""
+    ),
+
+    y = min(max_y + 0.25, 3.4)
+  )
+
+str(dat)
+
+#-----------------------------
+# 2. Boxplot principal
+#-----------------------------
+p <- ggplot(dat, aes(x = propSIGV, y = NBE, fill = Strategy)) +
+
+  geom_boxplot(
+    width = 0.5,
+    position = position_dodge(d),
+    outlier.shape = NA
+  ) +
+
+  geom_point(
+    aes(y = NBE),
+    color = "black",
+    size = 0.3,
+    alpha = 0.3,
+    show.legend = FALSE,
+    position = position_jitterdodge(
+      jitter.width = 0.5,
+      dodge.width = d
+    )
+  ) +
+
+  scale_fill_manual(values = c(designs_colors)) +
+
+  scale_y_continuous(
+    limits = c(-1, 3.5),
+    breaks = seq(-1, 3.5, by = 0.5)
+  ) +
+
+  labs(
+    title = "Accuracy of (co)variance estimates",
+    x = "SIGV variance in terms of the proportion of DBV variance",
+    y = "Normalized Bias Error (NBE)"
+  ) +
+
+  facet_wrap(
+    ~parameter,
+    labeller = labeller(
+      parameter = as_labeller(parameter_labels, label_parsed)
+    )
+  ) +
+
+  custom_theme +
+
+  theme(
+    plot.title = element_text(face = "italic"),
+    axis.text.x = element_text(hjust = 1),
+    legend.position = "bottom"
+  )
+
+
+#-----------------------------------------
+# 3. Ajout des étoiles au-dessus des boîtes
+#-----------------------------------------
+p <- p +
+
+  geom_hline(
+    yintercept = 0,
+    colour = "black",
+    size = 0.5,
+    lty = "solid"
+  ) +
+
+  geom_text(
+    data = stat_test,
+    aes(
+      x = propSIGV,
+      y = 3.5,
+      label = signif,
+      group = Strategy
+    ),
+    position = position_dodge(width = d),
+    size = 3.5,
+    fontface = "bold",
+    show.legend = FALSE
+  )
+#-----------------------------------------
+# 4. Affichage
+#-----------------------------------------
+p + geom_hline(aes(yintercept = 0), colour = "black", size=0.5, lty="solid") +
+  theme_bw() +
+  theme(
+  axis.text.x = element_text(
+    vjust = 0.5, hjust = 1,
+    face = "bold", size = 10,
+    angle = 0
+  ),
+  axis.text.y = element_text(face = "bold", size = 10),
+  axis.title.x = element_text(face = "bold", size = 10),
+  axis.title.y = element_text(face = "bold", size = 10),
+  strip.text = element_text(face = "bold", size = 10),
+  plot.title = element_text(face = "bold", hjust = 0.5, size = 18))  + theme(legend.position = "bottom")
+
+```
+
+## Suppl Fig. 6
+
+Supplementary Figure 6: Estimation accuracy (normalized biased error on the y-axis, one dot per
+simulation) of error (co)variances(F= focal species; T= tester species), under varying levels of SIGV
+variance (x-axis)(var(SBV) = 20%var(DBV)). “*” above each box indicate whether the mean normalized
+biased error is significantly different from zero based on a one-sample t-test: * p < 0.05, ** p < 0.01, *** p < 0.001. Non-significant results are left unlabeled.
+
+```{r}
+dat <- rbind(datSigma2ErrWPur, datSigma2ErrWMix, datSigma2ErrPMix, datCorE)
+```
+
+```{r}
+parameter_labels <- c(
+  var_err_w_pur  = "sigma[e[F]^SC]^2",
+  var_err_w_mix  = "sigma[e[F]^IC]^2",
+  var_err_p_mix  = "sigma[e[T]^IC]^2",
+  Cor_E   = "rho[E^IC]"
+)
+
+dat <- dat %>%
+  mutate(parameter = factor(parameter, levels = names(parameter_labels)))
+dat$propSIGV <- as.factor(dat$propSIGV)
+
+dat <- dat %>%
+  mutate(Strategy = factor(Strategy, levels = c("sole_only", "sole_inter_50", "inter_only")))
+
+dat <- dat[dat$propSIGV%in%c(0.1, 0.3, 0.5), ]
+```
+
+```{r, fig.width=12, fig.height=8, warning = FALSE}
+d <- 0.5
+
+#--------------------------------------------------
+# 1. Calcul des t-tests + étoiles + position y
+#--------------------------------------------------
+stat_test <- dat %>%
+  group_by(parameter, Strategy, propSIGV) %>%
+  summarise(
+    n = n(),
+    max_y = max(NBE, na.rm = TRUE),
+    t_res = list(if(n() >= 100) t.test(NBE, mu = 0) else NA),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    p.value = map_dbl(
+      t_res,
+      ~ if (is.list(.x)) .x$p.value else NA_real_
+    ),
+
+    signif = case_when(
+      n < 100           ~ "n<100",
+      p.value < 0.001   ~ "***",
+      p.value < 0.01    ~ "**",
+      p.value < 0.05    ~ "*",
+      TRUE               ~ ""
+    ),
+
+    # position verticale des étoiles
+    y = pmin(max_y + 0.25, 3.4)
+  )
+
+str(dat)
+
+#-----------------------------
+# 2. Boxplot principal
+#-----------------------------
+p <- ggplot(dat, aes(x = propSIGV, y = NBE, fill = Strategy)) +
+
+  geom_boxplot(
+    width = 0.5,
+    position = position_dodge(d),
+    outlier.shape = NA
+  ) +
+
+  geom_point(
+    aes(y = NBE),
+    color = "black",
+    size = 0.3,
+    alpha = 0.3,
+    show.legend = FALSE,
+    position = position_jitterdodge(
+      jitter.width = 0.5,
+      dodge.width = d
+    )
+  ) +
+
+  scale_fill_manual(values = c(designs_colors)) +
+
+  scale_y_continuous(
+    limits = c(-1, 3.5),
+    breaks = seq(-1, 3.5, by = 0.5)
+  ) +
+
+  labs(
+    title = "Accuracy of error (co)variance estimates",
+    x = "SIGV variance in terms of the proportion of DBV variance",
+    y = "Normalized Bias Error (NBE)"
+  ) +
+
+  facet_wrap(
+    ~parameter,
+    labeller = labeller(
+      parameter = as_labeller(parameter_labels, label_parsed)
+    )
+  ) +
+
+  custom_theme +
+
+  theme(
+    plot.title = element_text(face = "italic"),
+    axis.text.x = element_text(hjust = 1),
+    legend.position = "bottom"
+  )
+
+
+#-----------------------------------------
+# 3. Ajout des étoiles au-dessus des boîtes
+#-----------------------------------------
+p <- p +
+
+  geom_hline(
+    yintercept = 0,
+    colour = "black",
+    size = 0.5,
+    lty = "solid"
+  ) +
+
+  geom_text(
+    data = stat_test,
+    aes(
+      x = propSIGV,
+      y = 3.5,
+      label = signif,
+      group = Strategy
+    ),
+    position = position_dodge(width = d),
+    size = 3.5,
+    fontface = "bold",
+    show.legend = FALSE
+  )
+#-----------------------------------------
+# 4. Affichage
+#-----------------------------------------
+p + geom_hline(aes(yintercept = 0), colour = "black", size=0.5, lty="solid") +
+  theme_bw() +
+  theme(
+  axis.text.x = element_text(
+    vjust = 0.5, hjust = 1,
+    face = "bold", size = 10,
+    angle = 0
+  ),
+  axis.text.y = element_text(face = "bold", size = 10),
+  axis.title.x = element_text(face = "bold", size = 10),
+  axis.title.y = element_text(face = "bold", size = 10),
+  strip.text = element_text(face = "bold", size = 10),
+  plot.title = element_text(face = "bold", hjust = 0.5, size = 18))  + theme(legend.position = "bottom")
+
+```
+
+
+
+# Figure 4
+
+compute $BV^{IC}$
+
+```{r}
+dat2 <- droplevels(parametersSIGV[parametersSIGV$Strategy %in% designs, ])
+dat2$Strategy <- factor(dat2$Strategy, levels = designs)
+```
+
+```{r}
+dat <- geneticValues %>%
+  mutate(propSIGV = dplyr::recode(Scenario, !!!propSIGVval))
+dat$propSIGV <- as.numeric(dat$propSIGV)
+dat <- dat %>%
+  group_by(Strategy, SimulID, propSIGV) %>%
+  summarise(
+    Correlation = cor(fixImix, estimImix, method = "pearson"),
+    Parameter = "cor_BVic",
+    .groups = "drop"
+  ) %>%
+  select(propSIGV, Strategy, SimulID, Parameter, Correlation)
+dat$Strategy <- factor(dat$Strategy, levels = c("sole_only", "sole_inter_50", "inter_only"))
+```
+
+```{r}
+str(dat)
+```
+
+```{r}
+p <- ggplot(dat, aes(x = factor(propSIGV), y = Correlation, fill = Strategy)) +
+  geom_boxplot(
+    position = position_dodge(0.5),
+    outlier.shape = NA)
+p <- p+ geom_point(data = dat, aes(y = Correlation),color = "black",
+    size = 0.3,alpha = 0.3, show.legend = FALSE,
+    position = position_jitterdodge(jitter.width = 0.5, dodge.width = 0.5) # Center points
+  ) 
+  p<- p+ scale_fill_manual(values = c(designs_colors)) +
+  theme_bw() +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.2)) +
+  labs(
+    x = "", 
+    y = ""
+  ) + ggtitle(expression(bold("Breeding values in intercropping (BV"^ic*")")))+
+  custom_theme
+
+bv_ic <- p +custom_axis + theme(legend.position = "none")
+# bv_ic
+```
+
+
+compute $BV^{SC}$
+
+```{r}
+dat <- droplevels(dat2[
+  ((dat2$Strategy %in% c("sole_only", "sole_inter_50") & dat2$Parameter %in% c("cor_cBV")) | 
+   (dat2$Strategy %in%c("inter_only") & dat2$Parameter %in% c("cor_DBV"))), ])
+dat$Strategy <- factor(dat$Strategy, levels = designs)
+dat <- droplevels(dat[!dat$Strategy=="inter_only", ])
+```
+
+```{r}
+datInter <- droplevels(geneticValues[geneticValues$Strategy=="inter_only", ])
+datInter<- datInter %>%
+  mutate(propSIGV = dplyr::recode(Scenario, !!!propSIGVval))
+datInter$propSIGV <- as.numeric(datInter$propSIGV)
+
+datInter <- datInter %>%
+  group_by(Strategy, SimulID, propSIGV) %>%
+  summarise(
+    Correlation = cor(fixIpure, estimIpure, method = "pearson"),
+    Parameter = "cor_bvsc",
+    .groups = "drop"
+  ) %>%
+  select(propSIGV, Strategy, SimulID, Parameter, Correlation)
+```
+
+```{r}
+colsToKeep <-  c("propSIGV","Correlation", "Strategy")
+tmp <- rbind(dat[,colsToKeep],
+             datInter[, colsToKeep])
+tmp$Strategy <- factor(tmp$Strategy, levels = c("sole_only", "sole_inter_50", "inter_only"))
+```
+
+
+```{r}
+str(tmp)
+```
+
+```{r}
+p <- ggplot(tmp, aes(x = factor(propSIGV), y = Correlation, fill = Strategy)) +
+  geom_boxplot(
+    position = position_dodge(0.5),
+    outlier.shape = NA)
+
+p <- p+ geom_point(data = tmp, aes(y = Correlation),color = "black",
+    size = 0.3,alpha = 0.3, show.legend = FALSE,
+    position = position_jitterdodge(jitter.width = 0.5, dodge.width = 0.5) # Center points
+  ) 
+  p<- p+ scale_fill_manual(values = c(designs_colors)) +
+  theme_bw() +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.2)) +
+  labs(
+    x = "", 
+    y = ""
+  ) +  ggtitle(expression(bold("Breeding values in sole crop (BV"^sc*")")))+
+  custom_theme
+
+bvsc <- p + custom_axis + theme(legend.position = "none")
+# bvsc
+```
+
+ 
+compute $DBV$
+
+```{r}
+pd <- position_dodge(0.1)
+dat <- droplevels(dat2[dat2$Parameter=="cor_DBV" & dat2$Strategy!="sole_only", ])
+tmp <- droplevels(dat2[dat2$Parameter=="cor_cBV" & dat2$Strategy=="sole_only", ])
+dat <-rbind(dat, tmp)
+dat$Strategy <- factor(dat$Strategy, levels = c("sole_only", "sole_inter_50", "inter_only"))
+dat <- droplevels(dat[!dat$Strategy=="sole_only", ])
+```
+
+```{r}
+datSole<- droplevels(geneticValues[geneticValues$Strategy=="sole_only", ])
+datSole<- datSole %>%
+  mutate(propSIGV = dplyr::recode(Scenario, !!!propSIGVval))
+datSole$propSIGV <- as.numeric(datSole$propSIGV)
+datSole <- datSole %>%
+  group_by(Strategy, SimulID, propSIGV) %>%
+  summarise(
+    Correlation = cor(True_DBV, Estimated_DBV, method = "pearson"),
+    Parameter = "cor_DBV",
+    .groups = "drop"
+  ) %>%
+  select(propSIGV, Strategy, SimulID, Parameter, Correlation)
+```
+
+```{r}
+colsToKeep <-  c("propSIGV","Correlation", "Strategy")
+tmp <- rbind(dat[,colsToKeep],
+             datSole[, colsToKeep])
+tmp$Strategy <- factor(tmp$Strategy, levels = c("sole_only", "sole_inter_50", "inter_only"))
+```
+
+
+```{r}
+str(tmp)
+```
+
+
+```{r}
+p <- ggplot(tmp, aes(x = factor(propSIGV), y = Correlation, fill = Strategy)) +
+  geom_boxplot(
+    position = position_dodge(0.5),
+    outlier.shape = NA,
+    width=width)
+
+p <- p+ geom_point(data = tmp, aes(y = Correlation),color = "black",
+    size = 0.3,alpha = 0.3, show.legend = FALSE,
+    position = position_jitterdodge(jitter.width = 0.5, dodge.width = 0.5) # Center points
+  ) 
+p <- p+ scale_fill_manual(values = c(designs_colors)) +
+  theme_bw() +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.2))
+
+ dbv <- p +
+  labs(
+    title = "Direct breeding values (DBV)", 
+    # x = "SIGV variance in terms of the proportion of DBV variance",
+    # y = "Correlation between true and estimated genetic values"
+    x="",
+    y=""
+  ) +
+   custom_theme + custom_axis + theme(legend.position = "none")
+# dbv
+```
+
+compute $SBV$
+
+```{r}
+pd <- position_dodge(0.1)
+dat <- droplevels(dat2[dat2$Parameter=="cor_SBV" & dat2$Strategy!="sole_only", ])
+str(dat)
+p <- ggplot(dat, aes(x = factor(propSIGV), y = Correlation, fill = Strategy)) +
+  geom_boxplot(
+    position = position_dodge(0.5),
+    outlier.shape = NA,
+    width=width)
+
+p <- p+ geom_point(data = dat, aes(y = Correlation),color = "black",
+    size = 0.3,alpha = 0.3, show.legend = FALSE,
+    position = position_jitterdodge(jitter.width = 0.5, dodge.width = 0.5) # Center points
+  ) 
+  p<-p+scale_fill_manual(values = c(designs_colors)) +
+  theme_bw() +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.2))
+
+sbv <- p +
+  labs(
+    title = "Social breeding values (SBV)", 
+    x = "", 
+    y = ""
+  ) +
+  custom_theme + custom_axis + theme(legend.position = "none")
+# sbv
+```
+
+compute $SIGV$
+
+```{r}
+pd <- position_dodge(0.1)
+dat <- droplevels(dat2[dat2$Parameter=="cor_SIGV" & 
+                         !(dat2$Strategy)%in%c("sole_only", "inter_only", "inter_only_ctrl"), ])
+str(dat)
+```
+
+```{r}
+p <- ggplot(dat, aes(x = factor(propSIGV), y = Correlation, fill = Strategy)) +
+  geom_boxplot(
+    position = position_dodge(0.5),
+    outlier.shape = NA,
+    width=width)
+
+p <- p+ geom_point(data = dat, aes(y = Correlation),color = "black",
+    size = 0.3,alpha = 0.3, show.legend = FALSE,
+    position = position_jitterdodge(jitter.width = 0.5, dodge.width = 0.5) # Center points
+  ) 
+ p <- p+ scale_fill_manual(values = c(designs_colors)) +
+  theme_bw() +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.2))
+
+sigv <- p +
+  labs(
+    title = "Social intragenotypic values (SIGV)", 
+    x = "", 
+    y = ""
+  ) +
+  custom_theme +custom_axis + theme(legend.position = "none")
+# sigv
+
+```
+
+## viz
+Figure 4: Pearson correlation between true and estimated breeding values for bvsc, DBV, SBV, and SIGV on the y-axis, along scenarios with increasing importance of SIGV, i.e., increasing ratio var(SIGV)/ var(DBV) on the x-axis (var(SBV) = 20% var(DBV), cor(DBV,SBV=-0.8). For the inter_only design, the true classical breeding value was compared with the estimated direct breeding value only, as SIGV was not estimable with this design.
+
+```{r, fig.width=16, fig.height=12, warning = FALSE}
+# --- Titles and axis labels ---
+TopTitle <- textGrob(
+  "",
+  gp = gpar(fontsize = 18, fontface = "bold")
+)
+
+xText <- textGrob(
+  "SIGV variance in terms of the proportion of DBV variance", 
+  gp = gpar(fontsize = 14, fontface = "bold"), just = "center"
+)
+
+yText <- textGrob(
+  "Correlation between true and estimated breeding values", 
+  gp = gpar(fontsize = 14, fontface = "bold"), 
+  rot = 90, just = "center"
+)
+
+# --- Custom colors for legend ---
+designs_colors <- c(
+  sole_only = "blue", 
+  sole_inter_50 = "orange",
+  inter_only = "red"
+)
+
+# --- Custom legend grob (vertical) ---
+legend_grob <- legendGrob(
+  labels = names(designs_colors),
+  pch = 15,
+  gp = gpar(
+    fill = designs_colors,
+    col = designs_colors,
+    fontsize = 16,
+    cex = 1.2
+  ),
+  ncol = 1,  # Changed to 1 column for vertical layout
+  byrow = FALSE  # Stack vertically
+)
+
+# --- Layout matrix with vertical legend in top left ---
+layout <- rbind(
+  c(6, 1, 2),   # Row 1: vertical legend in position 6, then bv_ic and bvsc
+  c(3, 4, 5)    # Row 2: dbv, sbv, sis
+)
+
+# --- Create plots grid including the legend ---
+plots_grid <- arrangeGrob(
+  bvsc, bv_ic, dbv, sbv, sigv, legend_grob,  # legend_grob as the 6th element
+  layout_matrix = layout,
+  top = TopTitle,
+  left = yText
+)
+
+# --- Stack plots and x-axis label ---
+final_layout <- arrangeGrob(
+  plots_grid,
+  xText,
+  ncol = 1,
+  heights = unit.c(
+    unit(1, "npc") - unit(1.5, "cm"),  # Reduced space since legend is integrated
+    unit(1, "cm")                      # x-axis
+  )
+)
+```
+
+
+```{r, fig.width=16, fig.height=12, warning = FALSE}
+# --- Draw final layout ---
+grid.newpage()
+grid.draw(final_layout)
+
+```
+
+# Figure 6
+
+Proportion of top-performing genotypes (y-axis) selected for a targeted cropping system (x-axis;  sole cropping, SC, or intercropping, IC), based on their breeding values estimated from three experimental designs (sole_only, sole_inter_50 and inter_only). Results are shown across increasing variance of social intragenotypic values: var(SIGV) = 10% (A), 30% (B), and 50% (C) of var(DBV). Other (co)variance parameters were fixed as follows: var(SBV) = 20% var(DBV), and cor(DBV,SBV) = -0.8. Error bars represent standard errors of the means across replicates. Tukey’s HSD test was performed separately within each level of var(SIGV); groups that do not share a common letter differ significantly (α = 0.05).
+
+
+```{r}
+dat <- droplevels(selectionSIS[selectionSIS$Strategy%in%designs, ])
+dat$Strategy <- factor(dat$Strategy, levels = c("sole_only", "sole_inter_50", "inter_only"))
+
+```
+
+```{r}
+selection <- dat %>%
+  rename(
+    IC = tppEstimMix,
+    SC = tppEstimSole
+  )
+
+# reformat
+data <- selection %>%
+  pivot_longer(cols = c(SC, IC),
+               names_to = "Metric",
+               values_to = "Value")
+#factor-levels
+data$Metric <- factor(data$Metric, levels = c("SC", "IC"))
+data$Strategy <- factor(data$Strategy, levels = c("sole_only",
+                                                  "sole_inter_50",
+                                                      "inter_only"))
+
+#summary-stats
+summary_stats <- data %>%
+  dplyr::group_by(Strategy, propSIGV, Metric) %>%
+  summarise(
+    MeanValue = mean(Value),
+    SDValue = sd(Value),
+      n         = n(),
+    SEValue   =  sd(Value) / sqrt(n), .groups = "drop_last"
+  ) %>%
+  ungroup()
+```
+
+
+filter the data on SIGV = 10, 30, 50 % of var(DBV)
+
+SIGV = 10% $sigma^2_{DBV}$
+
+```{r}
+# HSD test
+tmp <- droplevels(data[data$propSIGV==0.10,])
+HR=HSD.test(aov(Value~Strategy + Metric + Strategy*Metric, data=tmp), 
+            trt = c("Strategy", "Metric"), 
+            group = T)
+sig.letters <- HR$groups[order(row.names(HR$groups)), ]
+
+x.dat <- HR$means[order(row.names(HR$groups)), ]
+```
+
+```{r}
+dat <- droplevels(summary_stats[summary_stats$propSIGV==0.10,])
+dat$name <- paste0(dat$Strategy, ":", dat$Metric)
+dat$groups <- sig.letters$groups[match(as.character(rownames(sig.letters)), 
+                                       as.character(dat$name))]
+sigv10 <- ggplot(dat, aes(x = Metric, y = MeanValue, fill = Metric)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymin = MeanValue - SEValue, ymax = MeanValue + SEValue),
+                width = 0.2, position = position_dodge(0.9)) +
+  geom_text(aes(label = groups, y = 0.8),
+            size = 5, vjust = 0, fontface = "italic") +
+  facet_wrap(~ Strategy) +
+labs(
+  # title = expression(sigma[SIGV]^2 == 10*"% "* "of variance of DBV"),
+  title = bquote("A: " ~ sigma[SIGV]^2 == 10 * "%" * sigma[DBV]^2),
+  x = "",
+  y = "") +
+  theme_minimal() +
+  custom_theme + theme(
+    panel.border = element_blank(),
+    strip.background = element_blank(),
+    plot.title = element_text(face  = "bold"))+
+  guides(fill = "none")
+# sigv10
+
+```
+
+
+
+
+SIGV = 30% $sigma^2_{DBV}$
+
+
+```{r}
+# HSD test
+tmp <- droplevels(data[data$propSIGV==0.30,])
+HR=HSD.test(aov(Value~Strategy + Metric + Strategy*Metric, data=tmp), 
+            trt = c("Strategy", "Metric"), 
+            group = T)
+sig.letters <- HR$groups[order(row.names(HR$groups)), ]
+x.dat <- HR$means[order(row.names(HR$groups)), ]
+```
+
+
+
+
+```{r}
+dat <- droplevels(summary_stats[summary_stats$propSIGV==0.30,])
+dat$name <- paste0(dat$Strategy, ":", dat$Metric)
+dat$groups <- sig.letters$groups[match(as.character(rownames(sig.letters)), 
+                                       as.character(dat$name))]
+sigv30 <- ggplot(dat, aes(x = Metric, y = MeanValue, fill = Metric)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymin = MeanValue - SEValue, ymax = MeanValue + SEValue),
+                width = 0.2, position = position_dodge(0.9)) +
+  geom_text(aes(label = groups, y = 0.8),
+            size = 5, vjust = 0, fontface = "italic") +
+  facet_wrap(~ Strategy) +
+  labs(
+  # title = expression(sigma[SIGV]^2 == 30*"% "* "of variance of DBV"),
+  # title="B",
+  title = bquote("B: " ~ sigma[SIGV]^2 == 30 * "%" * sigma[DBV]^2),
+       x = "",
+y = "") +
+  theme_minimal() +
+  custom_theme + theme(
+    panel.border = element_blank(),
+    strip.background = element_blank(),
+    plot.title = element_text(face  = "bold"))+
+  guides(fill = "none")
+# sigv30 
+
+```
+
+SIGV = 50% $sigma^2_{DBV}$
+
+```{r}
+# HSD test
+tmp <- droplevels(data[data$propSIGV==0.50,])
+HR=HSD.test(aov(Value~Strategy + Metric + Strategy*Metric, data=tmp), 
+            trt = c("Strategy", "Metric"), 
+            group = T)
+sig.letters <- HR$groups[order(row.names(HR$groups)), ]
+
+x.dat <- HR$means[order(row.names(HR$groups)), ]
+```
+
+```{r}
+dat <- droplevels(summary_stats[summary_stats$propSIGV==0.50,])
+dat$name <- paste0(dat$Strategy, ":", dat$Metric)
+dat$groups <- sig.letters$groups[match(as.character(rownames(sig.letters)), 
+                                       as.character(dat$name))]
+sigv50 <- ggplot(dat, aes(x = Metric, y = MeanValue, fill = Metric)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymin = MeanValue - SEValue, ymax = MeanValue + SEValue),
+                width = 0.2, position = position_dodge(0.9)) +
+    geom_text(aes(label = groups, y = 0.8),
+            size = 5, vjust = 0, fontface = "italic") +
+  facet_wrap(~ Strategy) +
+  labs(
+    # title = expression(sigma[SIGV]^2 == 50*"% "* "of variance of DBV
+    # title="C",
+     title = bquote("C: " ~ sigma[SIGV]^2 == 50 * "%" * sigma[DBV]^2),
+       x = "", y = "") +
+  theme_minimal() +
+   custom_theme +
+  custom_theme + theme(
+    panel.border = element_blank(),
+    strip.background = element_blank(),
+    plot.title = element_text(face  = "bold"))+
+  guides(fill = "none")
+# sigv50
+```
+
+## viz
+
+```{r, fig.width=18, fig.height=6.5, warning = FALSE}
+TopTitle <- textGrob("The precision of genetic value estimation",
+                                        gp = gpar(fontsize = 18, fontface="bold"))
+
+xText <- textGrob("Targeted cropping system",
+                     gp = gpar(fontsize = 14, fontface="bold"), just = "center")
+
+yText <- textGrob("Proportion of best genotypes selected",
+                     gp = gpar(fontsize = 14, fontface="bold"),
+                     rot = 90, just = "center")
+
+grid.arrange(sigv10, sigv30, sigv50, ncol = 3, nrow=1, top=NULL,
+              bottom = xText,left = yText)
+```
+
+# Appendix
+
+```{r info}
+t1 <- proc.time(); t1 - t0
+print(sessionInfo(), locale=FALSE)
+```

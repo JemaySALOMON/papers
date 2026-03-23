@@ -1,0 +1,599 @@
+---
+title: "paper: plots"
+author: "Jemay Salomon"
+date: "`r format(Sys.time(), '%d/%m/%Y %H:%M:%S')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 6
+    number_sections: TRUE
+  pdf_document:
+    toc: true
+    toc_depth: 6
+    number_sections: TRUE
+abstract: |
+    This documents aims to do comparison of inference with and without using the genetic relationship matrix (denoted here as kinship)
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r}
+rm(list = ls())
+```
+
+
+```{=html}
+<!--
+This R chunk, hidden in the output, is used to set up important options.
+-->
+```
+```{r, echo=FALSE}
+if(! "params" %in% ls())
+  params <- list(root.dir=NULL)
+suppressPackageStartupMessages(library(knitr))
+opts_chunk$set(echo=TRUE, warning=TRUE, message=TRUE, cache=FALSE,
+               fig.align="center", dev="svglite", root.dir=params$root.dir)
+opts_knit$set(progress=TRUE, verbose=TRUE)
+```
+
+# Preamble
+
+Paths:
+
+```{r}
+projectDir <- here::here("Joint-modeling-of-direct-and-social-genetics-effects")
+# projectDir <- here::here("../") #choose your path
+stopifnot(dir.exists(projectDir))
+srcDir <- file.path(projectDir, "src")
+stopifnot(dir.exists(srcDir))
+rDir <- file.path(projectDir, "R")
+stopifnot(dir.exists(rDir))
+dataDir <- file.path(projectDir, "data")
+stopifnot(dir.exists(rDir))
+```
+
+Dependencies:
+
+```{r}
+suppressPackageStartupMessages(library(ggpubr))
+suppressPackageStartupMessages(library(purrr))
+suppressPackageStartupMessages(library(gtools))
+suppressPackageStartupMessages(library(agricolae))
+suppressPackageStartupMessages(library(data.table))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(plotly))
+suppressPackageStartupMessages(library(gridExtra))
+suppressPackageStartupMessages(library(grid))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(tidyr))
+suppressPackageStartupMessages(library(ggExtra))
+source(file.path(srcDir, "utils.R"))
+```
+
+Execution time (see the appendix):
+
+```{r time_0}
+t0 <- proc.time()
+```
+
+`with kinship (K)`
+
+```{r}
+subFolder <- "S4-S8_withK"
+evalDir <- file.path(dataDir, subFolder, "eval")
+inFs <- Sys.glob(file.path(evalDir, "tmb", "*"))
+scenarios <- "all"
+sep = ","
+# ex. scenarios <- list.files(file.path(dataDir, "infer"), pattern = "^S", full.names = FALSE)
+
+parameters <- list()
+
+for(scenario in scenarios){
+  scenario_files <- inFs[grepl(paste0(scenario,"_"), inFs)]
+  parameters_files <- scenario_files[grepl("parameters_raw", scenario_files)]
+  parameters_data <-  lapply(parameters_files, read.csv, sep = sep, dec = ".", encoding = "UTF-8")
+  parameters[[scenario]] <- parameters_data
+  
+}
+parametersWithK <- do.call(rbind, unlist(parameters, recursive = FALSE))
+parameters$Parameter <- as.character(parameters$Parameter)  # add this line
+parametersWithK$Parameter <- gsub("cor_SIS", "cor_SIGV", parametersWithK$Parameter)
+parametersWithK["fitWith"] <- "kinship"
+rownames(parametersWithK)<- NULL
+paramtest <- unlist(parameters, recursive = F)
+```
+
+
+`with Identity (not using kinship)`
+
+```{r}
+subFolder <- "S4-S8_withID"
+evalDir <- file.path(dataDir, subFolder, "eval")
+inFs <- Sys.glob(file.path(evalDir, "tmb", "*"))
+scenarios <- "all"
+# ex. scenarios <- list.files(file.path(dataDir, "infer"), pattern = "^S", full.names = FALSE)
+parameters <- list()
+
+for(scenario in scenarios){
+  scenario_files <- inFs[grepl(paste0(scenario,"_"), inFs)]
+  parameters_files <- scenario_files[grepl("parameters_raw", scenario_files)]
+  parameters_data <-  lapply(parameters_files, read.csv, sep = sep, dec = ".", encoding = "UTF-8")
+  parameters[[scenario]] <- parameters_data
+}
+parametersWithoutK <- do.call(rbind, unlist(parameters, recursive = FALSE))
+parametersWithoutK$Parameter <- gsub("cor_SIS", "cor_SIGV", parametersWithoutK$Parameter)
+parametersWithoutK["fitWith"] <- "Identity"
+rownames(parametersWithoutK)<- NULL
+```
+
+
+```{r}
+parameters <- rbind(parametersWithoutK, parametersWithK)
+parameters <- convertCharacterColumnsToFactor(parameters)
+parameters$fitWith <- factor(parameters$fitWith, levels = c("Identity", "kinship"))
+parameters <- convertCharacterColumnsToFactor(parameters)
+```
+
+
+# Visualization 
+
+## set graphic design parameters
+
+```{r}
+method ="pearson"
+```
+
+```{r}
+designsOfInterest <- c("sole_only", "inter_only", "sole_inter_50")
+designsOfInterest_color <- c(sole_only = "blue", inter_only = "red",inter_only_ctrl = "orange")
+dat.color <- "black"; size = 0.5  
+```
+
+```{r, fig.width=16, fig.height=6, warning = FALSE}
+subTitle <- textGrob(
+  expression(var[SIS] == 0.5 * var[DBV] ~ "," ~
+             var[SBVw] == 0.2 * var[DBV] ~ "," ~
+             cor[DBVw_SBVw] == -0.8),
+  gp = gpar(fontsize = 14))
+```
+
+```{r}
+ctheme <- theme(
+  axis.text.x = element_text(
+    vjust = 0.5, hjust = 1,
+    face = "bold", size = 10,
+    angle = 0
+  ),
+  axis.text.y = element_text(face = "bold", size = 10),
+  axis.title.x = element_text(face = "bold", size = 10),
+  axis.title.y = element_text(face = "bold", size = 10),
+  strip.text = element_text(face = "bold", size = 10),
+  plot.title = element_text(face = "bold", hjust = 0.5, size = 18))  + theme(legend.position = "bottom") 
+```
+
+## filter design infos
+
+```{r}
+propSIGV <- c("S4" = 0.1, "S5" = 0.20, "S6" = 0.30, "S7" = 0.40, "S8" = 0.50)
+paramsDat_SIGV= droplevels(parameters[parameters$Strategy %in%designsOfInterest, ])
+paramsDat_SIGV$Strategy <- factor(paramsDat_SIGV$Strategy,levels = designsOfInterest)
+paramsDat_SIGV$propSIGV <-paramsDat_SIGV$Scenario
+paramsDat_SIGV <- paramsDat_SIGV%>%
+  mutate(propSIGV = dplyr::recode(propSIGV, !!!propSIGV))
+paramsDat_SIGV$propSIGV <- as.numeric(paramsDat_SIGV$propSIGV)
+
+```
+
+
+# Figure 5 and Suppl. Fig. 8
+
+`Format the data`
+
+```{r, fig.width=12, fig.height=8, warning = FALSE}
+pd <- position_dodge(0.1)
+dat <- droplevels(paramsDat_SIGV[paramsDat_SIGV$Parameter %in% c("cor_DBV", "cor_SBV", "cor_SIGV"), ])
+dat  = droplevels(dat[dat$Strategy=="sole_inter_50", ])
+summary(dat[dat$fitWith=="kinship" & dat$propSIGV==0.5 &  dat$Parameter=="cor_SIGV",]$Correlation)
+```
+
+```{r, fig.width=18, fig.height=8, warning = FALSE}
+HR=HSD.test(aov(Correlation~fitWith + propSIGV + Parameter+fitWith*Parameter + 
+                                                 propSIGV*Parameter, data=dat), 
+                                                 trt = c("propSIGV", "Parameter","fitWith"), 
+                                                  group = T)
+sig.letters <- HR$groups[order(row.names(HR$groups)), ]
+data <- HR$means[order(row.names(HR$groups)), ]
+data_dbv <- data[grep("cor_DBV", rownames(data)),]
+data_sbv <- data[grep("cor_SBV", rownames(data)),]
+data_sigv <- data[grep("cor_SIGV", rownames(data)),]
+# data_sigv[order(rownames(data_sigv)), ]
+```
+
+`DBV`
+
+```{r, fig.width=18, fig.height=8, warning = FALSE}
+# Filter dataset for DBV
+datDBV <- droplevels(dat[dat$Parameter == "cor_DBV", ])
+# Compute max correlation per group
+value_max2_dbv <- datDBV %>%
+  group_by(propSIGV, fitWith) %>%
+  summarize(max_value = max(Correlation), .groups = "drop")
+
+# Filter `sig.letters` using rownames that contain "cor_DBV"
+sig.letters_dbv <- droplevels(sig.letters[grep("cor_DBV", rownames(sig.letters)), ])
+sig.letters_dbv$combined <- rownames(sig.letters_dbv)
+sig.letters_dbv <- sig.letters_dbv %>%separate(combined, into = c("propSIGV", "Parameter", "fitWith"), sep = ":")
+sig.letters_dbv$propSIGV <- as.numeric(sig.letters_dbv$propSIGV)
+
+# Merge significance letters with `value_max2`
+value_max2 <- value_max2_dbv %>%
+  left_join(sig.letters_dbv, by = c("propSIGV", "fitWith"))
+
+
+# Define dodge position for proper alignment
+dodge <- position_dodge(width = 0.75)
+
+# Ensure propSIGV is a factor with correct order
+datDBV$propSIGV <- factor(datDBV$propSIGV, levels = unique(datDBV$propSIGV))
+value_max2$propSIGV <- factor(value_max2$propSIGV, levels = unique(value_max2$propSIGV))
+
+# Maintain the order of 'fitWith' levels
+datDBV$fitWith <- factor(datDBV$fitWith, levels = c("Identity", "kinship"))
+value_max2$fitWith <- factor(value_max2$fitWith, levels = c("Identity", "kinship"))
+
+# Create the boxplot
+DBV <- ggplot(datDBV, aes(x = factor(propSIGV), y = Correlation, fill = fitWith)) +
+  theme_bw() +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.2)) +
+
+  geom_boxplot(outlier.shape = NA, alpha = 0.7, position = dodge) +  # Apply dodge for alignment
+
+  # Add jittered points
+  geom_point(aes(y = Correlation), color = "black", size = 0.5, alpha = 1, 
+             show.legend = FALSE, position = position_jitterdodge(jitter.width = 0.5, dodge.width = 0.75)) +
+
+  # Add significance letters with spacing
+  geom_text(data = value_max2, 
+            aes(x = factor(propSIGV), y = 0.95, label = groups), 
+            vjust = 0, position = dodge, size = 5) +  # Adjust text size for better readability
+
+  scale_fill_manual(
+    name = "Fitting Method",
+    values = c("kinship" = "blue", "Identity" = "red"),
+    labels = c("kinship" = "fitWithKinship", "Identity" = "fitWithIdMatrix")
+  ) +
+
+  labs(
+    title = expression(italic("DBV")),
+    subtitle = "",
+    x = "",
+    y = ""
+  ) + 
+ ctheme + theme(legend.position = "none") # Assuming this is a predefined theme
+
+# Print the plot
+# print(DBV)
+
+
+```
+
+`SBV`
+
+```{r, fig.width=18, fig.height=8, warning = FALSE}
+# Filter dataset for DBV
+datSBV <- droplevels(dat[dat$Parameter == "cor_SBV", ])
+
+# Compute max correlation per group
+value_max2_SBV <- datSBV %>%
+  group_by(propSIGV, fitWith) %>%
+  summarize(max_value = max(Correlation), .groups = "drop")
+
+# Filter `sig.letters` using rownames that contain "cor_SBV"
+sig.letters_SBV <- droplevels(sig.letters[grep("cor_SBV", rownames(sig.letters)), ])
+sig.letters_SBV$combined <- rownames(sig.letters_SBV)
+sig.letters_SBV <- sig.letters_SBV %>%separate(combined, into = c("propSIGV", "Parameter", "fitWith"), sep = ":")
+sig.letters_SBV$propSIGV <- as.numeric(sig.letters_SBV$propSIGV)
+
+# Merge significance letters with `value_max2`
+value_max2 <- value_max2_SBV %>%
+  left_join(sig.letters_SBV, by = c("propSIGV", "fitWith"))
+
+# Define dodge position for proper alignment
+dodge <- position_dodge(width = 0.75)
+
+# Ensure propSIGV is a factor with correct order
+datSBV$propSIGV <- factor(datSBV$propSIGV, levels = unique(datSBV$propSIGV))
+value_max2$propSIGV <- factor(value_max2$propSIGV, levels = unique(value_max2$propSIGV))
+
+# Maintain the order of 'fitWith' levels
+datSBV$fitWith <- factor(datSBV$fitWith, levels = c("Identity", "kinship"))
+value_max2$fitWith <- factor(value_max2$fitWith, levels = c("Identity", "kinship"))
+
+# Create the boxplot
+SBV <- ggplot(datSBV, aes(x = factor(propSIGV), y = Correlation, fill = fitWith)) +
+  theme_bw() +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.2)) +
+
+  geom_boxplot(outlier.shape = NA, alpha = 0.7, position = dodge) +  # Apply dodge for alignment
+
+  # Add jittered points
+  geom_point(aes(y = Correlation), color = "black", size = 0.5, alpha = 1, 
+             show.legend = FALSE, position = position_jitterdodge(jitter.width = 0.5, dodge.width = 0.75)) +
+
+  # Add significance letters with spacing
+  geom_text(data = value_max2, 
+            aes(x = factor(propSIGV), y = 0.95, label = groups), 
+            vjust = 0, position = dodge, size = 5) +  # Adjust text size for better readability
+
+  scale_fill_manual(
+    name = "Fitting Method",
+    values = c("kinship" = "blue", "Identity" = "red"),
+    labels = c("kinship" = "fitWithKinship", "Identity" = "fitWithIdMatrix")
+  ) +
+
+  labs(
+    title = expression(italic("SBV")),
+    subtitle = "",
+    x = "",
+    y = ""
+  ) + 
+   ctheme + theme(legend.position = "none") # Assuming this is a predefined theme
+
+# Print the plot
+# print(SBV)
+```
+
+`SIGV`
+
+```{r, fig.width=18, fig.height=8, warning = FALSE}
+# Filter dataset for DBV
+datSIGV <- droplevels(dat[dat$Parameter == "cor_SIGV", ])
+
+# Compute max correlation per group
+value_max2_SIGV <- datSIGV%>%
+  group_by(propSIGV, fitWith) %>%
+  summarize(max_value = max(Correlation), .groups = "drop")
+
+# Filter `sig.letters` using rownames that contain "cor_SIGV"
+sig.letters_SIGV <- droplevels(sig.letters[grep("cor_SIGV", rownames(sig.letters)), ])
+sig.letters_SIGV$combined <- rownames(sig.letters_SIGV)
+sig.letters_SIGV <- sig.letters_SIGV %>%separate(combined, into = c("propSIGV", "Parameter",
+                                                                     "fitWith"), sep = ":")
+sig.letters_SIGV$propSIGV <- as.numeric(sig.letters_SIGV$propSIGV)
+
+# Merge significance letters with `value_max2`
+value_max2 <- value_max2_SIGV %>%
+  left_join(sig.letters_SIGV, by = c("propSIGV", "fitWith"))
+
+# Define dodge position for proper alignment
+dodge <- position_dodge(width = 0.75)
+
+# Ensure propSIGV is a factor with correct order
+datSIGV$propSIGV <- factor(datSIGV$propSIGV, levels = unique(datSIGV$propSIGV))
+value_max2$propSIGV <- factor(value_max2$propSIGV, levels = unique(value_max2$propSIGV))
+
+# Maintain the order of 'fitWith' levels
+datSIGV$fitWith <- factor(datSIGV$fitWith, levels = c("Identity", "kinship"))
+value_max2$fitWith <- factor(value_max2$fitWith, levels = c("Identity", "kinship"))
+
+SIGV <- ggplot(datSIGV, aes(x = propSIGV, y = Correlation, fill = fitWith)) +
+  theme_bw() +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.2)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7, position = dodge) +  # Apply dodge for alignment
+  # Add jittered points
+  geom_point(aes(y = Correlation), color = "black", size = 0.5, alpha = 1, 
+             show.legend = FALSE, position = position_jitterdodge(jitter.width = 0.5, dodge.width = 0.75)) +
+  # Add significance letters with proper alignment
+  geom_text(data = value_max2, 
+            aes(x = propSIGV, y = 0.95, label = groups, group = fitWith), 
+            vjust = 0, position = position_dodge(width = 0.75), size = 5) +  # Ensure correct spacing for labels
+
+  scale_fill_manual(
+    name = "Fitting Method",
+    values = c("kinship" = "blue", "Identity" = "red"),
+    labels = c("kinship" = "fitWithKinship", "Identity" = "fitWithIdMatrix")) +
+
+  labs(
+    title = expression(italic("SIGV")),
+    subtitle = "",
+    x = "",
+    y = ""
+  ) + 
+ ctheme + theme(legend.position = "none") # Assuming this is a predefined theme
+
+
+# Print the plot
+# print(SIGV)
+```
+
+### Figure 5
+
+Figure 5: Pearson correlations between true and estimated breeding values (y-axis) for DBV, SBV, and SIGV (x-axis). Parameter relationships are defined as var(SBV)= 20% var(DBV) and var(SIGV) = 50% var(DBV). Estimates obtained with an identity matrix (IM) are shown in red, whereas estimates with a genomic relationship matrix (GRM) are shown in blue. Groups that do not share a common letter differ significantly according to Tukey’s HSD test at the 5% significance level.
+
+```{r}
+dat <- rbind(datDBV, datSBV, datSIGV)
+str(datDBV)
+dat <- droplevels(dat[dat$propSIGV==0.5, ])
+str(dat)
+table(dat$Parameter, dat$fitWith)
+dat$Parameter <- gsub("cor_SBV", "SBV", dat$Parameter)
+dat$Parameter <- gsub("cor_DBV", "DBV", dat$Parameter)
+dat$Parameter <- gsub("cor_SIGV", "SIGV", dat$Parameter)
+dat$fitWith <- gsub("Identity", "IM", dat$fitWith)
+dat$fitWith <- gsub("kinship", "GRM", dat$fitWith)
+dat$Parameter <- factor(dat$Parameter, levels = c("DBV", "SBV", "SIGV"))
+dat$fitWith <- factor(dat$fitWith, levels = c("IM", "GRM"))
+```
+```{r}
+HR=HSD.test(aov(Correlation~ fitWith + Parameter+ fitWith*Parameter, data=dat), 
+            trt = c("Parameter","fitWith"), 
+            group = T)
+sig.letters <- HR$groups[order(row.names(HR$groups)), ]
+data <- HR$means[order(row.names(HR$groups)), ]
+```
+
+```{r}
+# Compute max correlation per group
+value_max2 <- dat %>%
+  group_by(Parameter, fitWith) %>%
+  summarize(max_value = max(Correlation), .groups = "drop")
+
+sig.letters$combined <- rownames(sig.letters)
+sig.letters <- sig.letters %>%separate(combined, into = c("Parameter", "fitWith"), sep = ":")
+
+# Merge significance letters with `value_max2`
+value_max2 <- value_max2 %>%
+  left_join(sig.letters, by = c("Parameter", "fitWith"))
+value_max2$fitWith <- factor(value_max2$fitWith, levels = c("IM", "GRM"))
+```
+
+
+
+```{r, fig.width=10, fig.height=6, warning = FALSE}
+d <- 0.5
+p <- ggplot(dat, aes(x = Parameter, y = Correlation, fill = fitWith)) +
+
+  geom_boxplot(
+    width = 0.5,
+    position = position_dodge(d),
+    outlier.shape = NA
+  ) +
+
+  geom_point(
+    aes(y = Correlation),
+    color = "black",
+    size = 0.3,
+    alpha = 0.3,
+    show.legend = FALSE,
+    position = position_jitterdodge(
+      jitter.width = 0.5,
+      dodge.width = d
+    )
+  ) +
+  
+  geom_text(data = value_max2, 
+            aes(x = Parameter, y = 0.95, label = groups, group = fitWith), 
+            vjust = 0, position = position_dodge(width = d), size = 5) + 
+  scale_fill_manual(values = c("red", "blue")) +
+  scale_y_continuous(
+    limits = c(0, 1),
+    breaks = seq(0, 1, by = 0.2)) +
+
+  labs(
+    title = "Sole_inter_50",
+    x = "",
+    y = "Correlation between true and estimated breeding values"
+  ) +
+  ctheme +
+  
+  theme(
+    plot.title = element_text(face = "italic"),
+    axis.text.x = element_text(hjust = 1),
+    legend.position = "bottom")
+
+
+#-----------------------------------------
+# 3. Ajout des étoiles au-dessus des boîtes
+#-----------------------------------------
+p +theme_bw() +
+  theme(
+  axis.text.x = element_text(
+    vjust = 0.5, hjust = 0.5,
+    face = "bold", size = 12,
+    angle = 0
+  ),
+  axis.text.y = element_text(face = "bold", size = 12),
+  axis.title.x = element_text(face = "bold", size = 12),
+  axis.title.y = element_text(face = "bold", size = 12),
+  strip.text = element_text(face = "bold", size = 12),
+  plot.title = element_text(face = "italic", hjust = 0, size = 12))  + 
+  theme(legend.position = "bottom", legend.title = element_blank())
+```
+
+
+### Suppl Fig.8
+
+Supplementary Figure 8: Pearson correlations between true and estimated breeding values (y-axis) across varying levels of social wheat DBVs-SBVs correlation (var(SBV) = 20% var(DBV)). Estimates obtained with an identity matrix (IM) are shown in red, whereas estimates with a genomic relationship matrix (GRM) are shown in blue. Groups that do not share a common letter differ significantly according to Tukey’s HSD test at the 5% significance level.
+             
+```{r, fig.width=16, fig.height=8, warning = FALSE}
+
+# --- Titles and axis labels ---
+TopTitle <- textGrob(
+  "sole_inter_50",
+  gp = gpar(fontsize = 18, fontface = "bold"),
+  hjust = 0, x = 0.05
+)
+
+xText <- textGrob(
+  "SIGV variance in terms of the proportion of DBV variance", 
+  gp = gpar(fontsize = 14, fontface = "bold"), 
+  just = "center"
+)
+
+yText <- textGrob(
+  "Correlation between true and estimated breeding values", 
+  gp = gpar(fontsize = 14, fontface = "bold"), 
+  rot = 90, just = "center"
+)
+
+# --- Custom colors with fitWithIdMatrix FIRST (in red) ---
+fit_colors <- c(IM = "red", GRM = "blue")
+
+# Create ordered labels (fitWithIdMatrix first, then fithWithGRM)
+legend_labels <- c("IM", "GRM")
+
+# --- Create legend grob with correct order ---
+legend_grob <- legendGrob(
+  labels = legend_labels,
+  pch = 15,  # Solid squares
+  gp = gpar(
+    fill = fit_colors[legend_labels],  # Colors in correct order
+    col = fit_colors[legend_labels],
+    fontsize = 10
+  ),
+  nrow = 1,
+  hgap = unit(0.4, "cm"),
+  vgap = unit(0.2, "cm"),
+  default.units = "cm"
+)
+
+# --- Layout: 3 plots on top, legend centered at bottom ---
+layout <- rbind(
+  c(1, 2, 3),  # First row: DBV, SBV, SIGV
+  c(4, 4, 4))   # Second row: legend (spans all 3 columns)
+
+# --- Create plots grid with legend at bottom ---
+plots_grid <- arrangeGrob(
+  DBV, SBV, SIGV, legend_grob,
+  layout_matrix = layout,
+  top = TopTitle,
+  left = yText,
+  heights = c(0.9, 0.1),  # 90% for plots, 10% for legend
+  padding = unit(0.5, "cm")
+)
+
+# --- Stack plots grid and x-axis label ---
+final_layout <- arrangeGrob(
+  plots_grid,
+  xText,
+  ncol = 1,
+  heights = c(0.95, 0.05)  # 95% for plots+legend, 5% for x-axis label
+)
+```
+
+
+```{r, fig.width=16, fig.height=8, warning = FALSE}
+# --- Draw final layout ---
+grid.newpage()
+grid.draw(final_layout)
+```
+
+
+
+# Appendix
+
+```{r info}
+t1 <- proc.time(); t1 - t0
+print(sessionInfo(), locale=FALSE)
+```

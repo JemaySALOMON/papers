@@ -1,0 +1,91 @@
+---
+title: "Using lab-01 image to reproduce the analysis in the article: 'Joint modeling
+  of direct and social genetic effects in mono-genotypic and pluri-specific groups:
+  case study in intercrops'"
+author: "J. Salomon"
+date: "March 19, 2026" 
+format:
+  html:
+    code-copy: true
+---
+
+# Overview
+
+A prebuilt Docker image containing R, all required packages, and system dependencies
+needed to reproduce the analyses in this repository is available on DockerHub.
+
+
+# 1. Prepare a project folder
+
+Create a folder for the nalysis (e.g. `paper1-simul`) and copy the repository
+files/folder (as organized) into it.
+
+
+# 2. Verify Docker
+
+Make sure Docker is installed on your system
+([https://docs.docker.com/desktop/](https://docs.docker.com/desktop/)):
+
+```bash
+docker --version
+docker info
+```
+
+# 3. Pull the prebuilt image
+
+Pull the image from DockerHub (this image is public — normally, no Docker Hub account is required to pull it): 
+```bash
+docker pull jemaysalomon/lab-01:0.1.12
+```
+
+
+# 4. Run an interactive container
+
+Mount your project folder when launching the container so you can work on the files.
+Note that this mirrors the project files — any changes made inside the container
+will be reflected in the local files. Make sure you mount to the correct pre-created
+folder.
+
+```bash
+docker run --rm -it \
+  -v ~/path/to/paper1-simul:/home/project \
+  jemaysalomon/lab-01:0.1.12 bash
+```
+
+You can check the R version and list installed packages. See the
+[Docker CLI reference](https://docs.docker.com/reference/cli/docker/) for more.
+You can also install additional packages and customize the image to suit your needs.
+
+```bash
+R --version
+Rscript -e "installed.packages('your-package')"
+```
+
+
+# 5. Run the analysis (e.g. the plots)
+
+Edit the path in `Plots.Rmd`. You should be one directory level up in R, so the
+path becomes:
+
+```r
+projectDir <- here::here("../")
+```
+
+Then run the following in the terminal:
+
+```bash
+Rscript -e "rmarkdown::render('R/Plots.Rmd', output_dir='R')"
+```
+
+You can repeat the same steps for the other files.
+
+**Note that**, upon acceptance of this article, this Docker image will contain code, data, and supplementary files, everything needed to fully reproduce the analyses in a single, self-contained environment.
+
+
+# Contact & License
+
+For any questions regarding this tutorial, send an email to:
+[jemaysalomon@gmail.com](mailto:jemaysalomon@gmail.com).
+
+Please make sure you are aware of the licenses that apply to the tools you are using
+and how you use them (see the `LICENSE` file).

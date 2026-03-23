@@ -1,0 +1,391 @@
+---
+title: "paper: gather the results"
+author: "J. Salomon"
+date: "`r format(Sys.time(), '%d/%m/%Y %H:%M:%S')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    number_sections: TRUE
+  pdf_document:
+    toc: true
+    toc_depth: 4
+    number_sections: TRUE
+abstract: |
+    Load inference results and write dataset (This script is meant to be run in parallel ortherwise, it will take sometimes) 
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{=html}
+<!--
+This R chunk, hidden in the output, is used to set up important options.
+-->
+```
+
+
+```{r, echo=FALSE}
+if(! "params" %in% ls())
+  params <- list(root.dir=NULL)
+suppressPackageStartupMessages(library(knitr))
+opts_chunk$set(echo=TRUE, warning=TRUE, message=TRUE, cache=FALSE,
+               fig.align="center", dev="svglite", root.dir=params$root.dir)
+opts_knit$set(progress=TRUE, verbose=TRUE)
+```
+
+
+# Preamble
+
+First `inference.Rmd` should be executed.
+
+
+```{r}
+projectDir <- here::here("Joint-modeling-of-direct-and-social-genetics-effects")  #choose your path
+# projectDir <- here::here("../")
+stopifnot(dir.exists(projectDir))
+srcDir <- file.path(projectDir, "src")
+stopifnot(dir.exists(srcDir))
+rDir <- file.path(projectDir, "R")
+stopifnot(dir.exists(rDir))
+```
+
+Dependencies:
+
+```{r}
+suppressPackageStartupMessages(library(TMB))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(doParallel))
+suppressPackageStartupMessages(library(data.table))
+suppressPackageStartupMessages(library(future.apply))
+suppressPackageStartupMessages(library(gtools))
+source(file.path(srcDir, "utils.R"))
+```
+
+Execution time (see the appendix):
+
+```{r time_0}
+t0 <- proc.time()
+```
+
+# Parameters
+
+## Default values
+
+See [rmd2out.R](https://github.com/timflutre/quantgen/blob/master/rmd2out.R).
+
+See the "Checks" section below.
+
+```{r}
+nbCores <- 1
+nbSimulsToRun <-NULL
+strategiesToRun <-NULL
+method <- NULL
+scenariosToRun <-NULL
+propToKeep_vector <- 0.10
+prop.sole <- 0.9
+w_sole <- 0.5
+tmb = TRUE
+asreml = FALSE
+DBVxSBV = FALSE
+paper <- "paper"
+sep = ","
+```
+
+## Set from the command-line
+
+```{r}
+for(i in seq_along(params$rmd.params))
+  assign(names(params$rmd.params)[i], params$rmd.params[[i]])
+```
+
+# path
+
+```{r}
+outDir <- file.path(projectDir, paper)
+simulDir <- file.path(outDir, "simul")
+inferDir <- file.path(outDir, "infer")
+
+evalDir <- file.path(outDir, "eval")
+if(! dir.exists(evalDir))
+  dir.create(evalDir)
+
+tmbDir <- file.path(evalDir, "tmb")
+if(! dir.exists(tmbDir))
+  dir.create(tmbDir, recursive=TRUE)
+```
+
+```{r}
+if(asreml)
+  suppressPackageStartupMessages(library(asreml))
+```
+
+
+
+## Name files
+
+```{r}
+if(is.null(scenariosToRun)){
+  scenario.Name <- "all_scenarios"
+}else{
+  NamesScenarios <- paste(scenariosToRun, collapse = "_")
+  scenario.Name <- NamesScenarios
+}
+
+if(is.null(strategiesToRun)){
+  strategies.Name <- "all_strategies"
+}else{
+  NameStrategies <- paste(strategiesToRun, collapse = "_")
+  strategies.Name <- NameStrategies
+}
+
+subfolder <- "tmb"
+```
+
+```{r}
+# if(FALSE){
+  if(is.null(scenariosToRun)){
+    scenariosToRun <- list.dirs(file.path(outDir, "simul"),
+                                full.names=FALSE, recursive=FALSE)
+  }
+# }
+```
+
+
+# load inference and construct dataframe
+
+```{r}
+stopifnot(!is.null(scenariosToRun))
+```
+
+```{r}
+# if(FALSE){
+  system.time({
+    # Initialize scenario_parameters outside the loop
+    scenario_parameters <- data.frame(Scenario = character(),
+                                      SimulID = character(),
+                                      Strategy = character(),
+                                      Parameter = character(),
+                                      True = numeric(),
+                                      Estimated = numeric(),
+                                      Correlation = numeric(),
+                                      stringsAsFactors = FALSE)
+
+    all_parameters <- list()
+    all_genetic <- list()
+
+
+    for (scenarioName in scenariosToRun) {
+
+      scenario_results <- list()
+      simulsToRun <- list.dirs(file.path(outDir, "infer", scenarioName),
+                               full.names = FALSE, recursive = FALSE)
+
+      if (!is.null(nbSimulsToRun)) {
+        simulsToRun = sprintf("simul%03d", 1:nbSimulsToRun)
+      }
+
+      for (simulId in simulsToRun) {
+        stopifnot(simulId%in%simulsToRun)
+        if (is.null(strategiesToRun))
+          strategiesToRun <- list.dirs(file.path(outDir, "infer", scenarioName, simulId),
+                                       full.names = FALSE, recursive = FALSE)
+
+        # ##parameters
+        # if(asreml){
+        #   parameters <- paramsStrat_asreml(strategiesToRun, strategy, outDir, scenarioName,
+        #                                    simulId, nbCores, scenario_parameters, method)}
+        if(tmb){
+          parameters <- paramsStrat(strategiesToRun,
+                                    strategy,
+                                    outDir,
+                                    scenarioName,
+                                    simulId,
+                                    nbCores,
+                                    scenario_parameters,
+                                    method,
+                                    dllIDPath=srcDir,
+                                    DBVxSBV=DBVxSBV)}
+
+        all_parameters <- c(all_parameters, parameters)
+
+        # genetic values
+        simul_results <- corStrat(strategiesToRun, strategy,
+                                  outDir, scenarioName,
+                                  simulId, nbCores, asreml, tmb,
+                                  dllIDPath=srcDir,DBVxSBV=DBVxSBV)
+
+        scenario_results <- c(scenario_results, simul_results)
+
+      }
+
+      scenario_results_df <- do.call(rbind, scenario_results)
+      all_genetic[[scenarioName]] <- scenario_results_df
+    }
+  })
+```
+
+
+
+```{r}
+genetic_values <- do.call(rbind, all_genetic)
+rownames(genetic_values) <- NULL
+parameters <- do.call(rbind, unlist(all_parameters, recursive = FALSE))
+rownames(parameters) <- NULL
+outF <- file.path(evalDir, subfolder,
+                  paste0("paper", "_",scenario.Name,"_",strategies.Name,"_parameters_raw.csv"))
+write.table(parameters, outF, quote=FALSE, sep=sep, row.names = F)
+outF <- file.path(evalDir, subfolder,
+                  paste0("paper", "_",scenario.Name,"_",strategies.Name,"_genetic_values_raw.csv"))
+write.table(genetic_values, outF, quote=FALSE, sep=sep, row.names = F)
+```
+
+
+# compute and add selection indices to genetic value data.frame
+
+```{r, warning = FALSE}
+# if(FALSE){
+plan(multisession)
+index <- future_lapply(unique(genetic_values$Strategy), function(strategy) {
+  
+  tmp <- genetic_values[genetic_values$Strategy == strategy, ]
+  
+  tmp$trueIpure <- NA
+  tmp$trueImix <- NA
+  tmp$estimIpure <- NA
+  tmp$estimImix <- NA
+  
+  tmp <- selectIdx(tmp, strategy)
+  
+  for(w_sole in c(0, 0.25, 0.50, 0.75, 1)){
+    tmp[[paste0("TrueIdxMixSole_", w_sole)]] <-IdxMixSole(tmp, colGenos = "genotypes", colDBV = "True_DBV", 
+                                    colSBV = "True_SBV", colSIGV = "True_SIGV", w_sole = w_sole)[["Idx"]]
+    tmp[[paste0("estimIdxMixSole_", w_sole)]] <- IdxMixSole(tmp, colGenos = "genotypes", colDBV = "Estimated_DBV",
+                                      colSBV = "Estimated_SBV", colSIGV = "Estimated_SIGV", w_sole = w_sole)[["Idx"]]
+  }
+  
+  return(tmp)
+})
+
+# Combine the results
+genetic_values <- do.call(rbind, index)
+# }
+```
+
+`save data`
+
+```{r}
+
+# outF <- file.path(evalDir, "tmb","phdmobidiv_all_scenarios_all_strategies_genetic_values.csv")
+# write.table(genetic_values, outF, quote=FALSE, sep=sep, row.names=FALSE)
+
+outF <- file.path(evalDir, subfolder,
+                  paste0("paper", "_",scenario.Name,"_",strategies.Name,"_genetic_values.csv"))
+write.table(genetic_values, outF, quote=FALSE, sep=sep, row.names=FALSE)
+# }
+```
+
+
+# compute the true positive rate and design accuracy for selection
+
+```{r}
+scenariosToRun <- NULL
+nbSimulsToRun <- NULL
+strategiesToRun <- NULL
+```
+
+```{r}
+# if(FALSE){
+# setting up some params
+if(is.null(scenariosToRun))
+  scenariosToRun<- unique(genetic_values$Scenario)
+
+if(is.null(nbSimulsToRun)) {
+  simulsToRun <- unique(genetic_values$SimulID)
+} else{
+  # nbSimulsToRun = simulToRun
+  simulsToRun = sprintf("simul%03d", 1:nbSimulsToRun)
+}
+
+if(is.null(strategiesToRun))
+  strategiesToRun <- unique(genetic_values$Strategy)
+# }
+```
+
+```{r}
+# Create an empty dataframe to store the results
+selection <- data.frame()
+
+# Iterate over scenarios, simulation IDs, strategies, and propToKeep values
+for (scenarioName in scenariosToRun) { 
+  for (simulId in simulsToRun) {
+    for (strategy in strategiesToRun) {
+      for (propToKeep in propToKeep_vector) {
+        
+        data <- genetic_values %>%
+          filter(Scenario == scenarioName &
+                 SimulID == simulId &
+                 Strategy == strategy)
+        
+        # Compute TPR
+        tppEstimSole <- FTPR(data, colGenos = "genotypes", propToKeep = propToKeep, 
+                             colTrueIdx = "fixIpure",  colPredIdx = "estimIpure", TPR = TRUE)
+        
+        tppEstimMix <- FTPR(data, colGenos = "genotypes", propToKeep = propToKeep, 
+                            colTrueIdx = "fixImix",  colPredIdx = "estimImix", TPR = TRUE)
+        
+        # LinearIdx
+        # tppIdxSoleMix <- binaryClassif(
+        #   IdxMixSole(data, colGenos = "genotypes", colDBV = "True_DBV",
+        #              colSBV = "True_SBV", colSIGV = "True_SIS",
+        #              propToKeep = propToKeep, w_sole = w_sole)[["boolVec"]],
+        #   IdxMixSole(data, colGenos = "genotypes", colDBV = "Estimated_DBV",
+        #              colSBV = "Estimated_SBV", colSIGV = "Estimated_SIS",
+        #              propToKeep = propToKeep, w_sole = w_sole)[["boolVec"]])[["tpp"]]
+        
+        # Create a temporary dataframe for the current iteration
+        tmp <- data.frame(Scenario = scenarioName,
+                             SimulID = simulId,
+                             Strategy = strategy,
+                             propToKeep = propToKeep,
+                             tppEstimSole = tppEstimSole,
+                             tprEstimMix = tppEstimMix,
+                             # tppIdxSoleMix = tppIdxSoleMix,
+                             stringsAsFactors = FALSE)
+        
+        # Add results for different w_sole values
+        for (w_sole in c(0, 0.25, 0.5, 0.75, 1)) {
+          tppEstimSole_w <- FTPR(data, colGenos = "genotypes", propToKeep = propToKeep, 
+                                 colTrueIdx = "fixIpure",  colPredIdx = paste0("estimIdxMixSole_", w_sole), TPR = TRUE)
+          
+          tppEstimMix_w <- FTPR(data, colGenos = "genotypes", propToKeep = propToKeep, 
+                                colTrueIdx = "fixImix",  colPredIdx = paste0("estimIdxMixSole_", w_sole), TPR = TRUE)
+          
+          # Add w_sole specific columns to temporary dataframe
+          tmp[[paste0("tppEstimSole_", w_sole)]] <- tppEstimSole_w
+          tmp[[paste0("tprEstimMix_", w_sole)]] <- tppEstimMix_w
+        }
+        
+        # Add the temporary dataframe to the main results
+        selection <- rbind(selection, tmp)
+      }
+    }
+  }
+}
+```
+
+## `save data`
+
+```{r}
+outF <- file.path(evalDir, subfolder,
+                  paste0("paper", "_",scenario.Name,"_",strategies.Name,"_selection.csv"))
+write.table(selection, outF, quote=FALSE, sep=sep, row.names=FALSE)
+```
+
+# Appendix
+
+```{r info}
+t1 <- proc.time(); t1 - t0
+print(sessionInfo(), locale=FALSE)
+```

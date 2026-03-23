@@ -1,0 +1,359 @@
+---
+title: "paper: inference"
+author: "J. Salomon"
+date: "`r format(Sys.time(), '%d/%m/%Y %H:%M:%S')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    number_sections: TRUE
+  pdf_document:
+    toc: true
+    toc_depth: 4
+    number_sections: TRUE
+abstract: |
+    This documents aims to do inference for data simulate with `simulPhenos.Rmd`.
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{=html}
+<!--
+This R chunk, hidden in the output, is used to set up important options.
+-->
+```
+
+```{r, echo=FALSE}
+if(! "params" %in% ls())
+  params <- list(root.dir=NULL)
+suppressPackageStartupMessages(library(knitr))
+opts_chunk$set(echo=TRUE, warning=TRUE, message=TRUE, cache=FALSE,
+               fig.align="center", dev="svglite", root.dir=params$root.dir)
+opts_knit$set(progress=TRUE, verbose=TRUE)
+```
+
+# Preamble
+
+First `simulPhenos.Rmd` should be executed.
+
+```{r}
+projectDir <- here::here("Joint-modeling-of-direct-and-social-genetics-effects")
+# projectDir <- here::here("../") #choose your path
+stopifnot(dir.exists(projectDir))
+srcDir <- file.path(projectDir, "src")
+stopifnot(dir.exists(srcDir))
+rDir <- file.path(projectDir, "R")
+stopifnot(dir.exists(rDir))
+```
+
+
+Dependencies:
+
+```{r}
+suppressPackageStartupMessages(library(TMB))
+suppressPackageStartupMessages(library(parallel))
+suppressPackageStartupMessages(library(future.apply))
+source(file.path(srcDir, "utils.R"))
+```
+
+Execution time (see the appendix):
+
+
+```{r time_0}
+t0 <- proc.time()
+```
+
+# Parameters
+
+See [rmd2out.R](https://github.com/timflutre/quantgen/blob/master/rmd2out.R).
+
+## Default values
+
+See the "Checks" section below.
+
+```{r}
+nbSimulsToRun <- NULL
+strategiesToRun <- NULL
+scenariosToRun <- "S1"
+nbCores <- detectCores()-1
+nbCores <- 1
+asreml = FALSE
+tmb = TRUE
+inferWithK = TRUE
+debug = FALSE
+paper = "paper"
+```
+
+
+## Set from the command-line
+
+```{r}
+for(i in seq_along(params$rmd.params))
+  assign(names(params$rmd.params)[i], params$rmd.params[[i]])
+```
+
+## For debug otpions
+
+```{r}
+if(debug){
+  strategiesToRun <- "sole_only"
+  scenariosToRun <- "S1"
+  nbSimulsToRun = 1
+}
+```
+
+```{r}
+# for windows users
+if(Sys.info()[["sysname"]] == "Windows"){
+dllID = "MMTMB"
+  TMB::compile(
+    file = file.path(srcDir, paste0(dllID, ".cpp")),
+    flags = "-g -O1",
+    DLLFLAGS = ""
+  )
+}
+```
+
+# Paths
+
+```{r}
+# outDir <- file.path(resultsDir, paste0("paper1_", paperScenarios))
+outDir <- file.path(projectDir, paper)
+inferDir <- file.path(outDir, "infer")
+if(! dir.exists(inferDir))
+  dir.create(inferDir)
+
+if(is.null(scenariosToRun))
+  scenariosToRun <- list.dirs(file.path(outDir, "simul"), 
+                              full.names = FALSE, recursive = FALSE)
+```
+
+
+```{r}
+if(! is.null(scenariosToRun))
+  stopifnot(all(grepl("^S", scenariosToRun)))
+if(! is.null(nbSimulsToRun))
+  stopifnot(!isDecimal(nbSimulsToRun))
+# if(! is.null(strategiesToRun))
+#   stopifnot(all(grepl("^D", strategiesToRun)))
+
+print(scenariosToRun)
+print(nbSimulsToRun)
+print(strategiesToRun)
+print(nbCores)
+```
+
+
+```{r}
+if(asreml)
+  suppressPackageStartupMessages(library(asreml))
+```
+
+
+# Useful functions
+
+```{r}
+launchSimul <- function(scenarioName, scenarioDir, simulId, strategiesToRun){
+  simulDir <- file.path(scenarioDir, simulId)
+  if(dir.exists(simulDir))
+    unlink(simulDir, recursive=TRUE)
+  dir.create(simulDir)
+  
+  if(is.null(strategiesToRun))
+    strategiesToRun <- list.dirs(file.path(outDir, "simul", scenarioName, simulId),
+                                 full.names = FALSE, recursive = F)
+  # mc lapply
+  tmp <- mclapply(strategiesToRun, function(strategy){
+    launchStrat(strategy, simulId, simulDir, scenarioName, outDir,verbose, 
+                                 asreml=asreml, tmb=tmb, inferWithK=inferWithK)
+  }, mc.cores=nbCores)
+  # for loop
+  # for (strategy in strategiesToRun){
+  #   launchStrat(strategy, simulId, simulDir, scenarioName, outDir,verbose, 
+  #                                asreml=asreml, tmb=tmb,inferWithK = inferWithK)
+  # }
+}
+```
+
+## Fit with TMB
+
+```{r}
+#' @title tmbDBVSBV
+#'
+#'@description
+#' Function to fit TMB model
+#'
+#' @param listXs : fixed effects formula
+#' @param fitWthSIS parameters to estimate SIS parameters
+#' @param Y  a list of dataset
+#' @param listZs  a list a incidence matrix
+#' @param listVCov  a list of var-cov matrix
+#' @param dllID specify the TMB dllID name (do not recommend)
+#' @param strategy specify the design type { pure-only, mix-only or pure & mix}
+#' @return A list containing TMB::MakeADFun and nlminb tmbObjects
+tmbDBVSBV <- function(Y, listXs, listZs, listVCov, 
+                      dllID, verbose, strategy, coef.fixed,
+                      silent, REML, inferWithK){
+  
+  #Range check
+  stopifnot(requireNamespace("TMB", quietly=TRUE),
+            is.list(Y),
+            is.list(listZs),
+            ! is.null(names(listZs)),
+            is.list(listXs),
+            ! is.null(names(listXs)),
+            is.list(listVCov),
+            ! is.null(names(listVCov)),
+            is.logical(verbose),
+            is.logical(silent),
+            is.logical(REML))
+  
+  #set arguments parameters
+  funArgs <- list(Y = Y, listXs = listXs,
+                  coef.fixed= coef.fixed,
+                  listZs = listZs,
+                  listVCov = listVCov,
+                  dllID = dllID,
+                  verbose = verbose,
+                  silent = silent,
+                  REML=REML,
+                  inferWithK=inferWithK)
+  #set conditions
+  if (strategy == "sole_only")
+    out <- do.call(lmmTMB, funArgs)
+  else
+    out <- do.call(MMTMB, funArgs)
+  return(out)
+}
+```
+
+## Fit with asreml
+
+```{r}
+#' @title asremlDBVSBV
+#'
+#'@description
+#' Function to fit TMB model
+#'
+#' @param listXs : fixed effects formula
+#' @param Y  a list of dataset
+#' @param listZs  a list a incidence matrix
+#' @param listVCov  a list of var-cov matrix
+#' @param dllID specify the TMB dllID name (do not recommend)
+#' @param strategy specify the design type { pure-only, mix-only or pure & mix}
+#' @return A list containing TMB::MakeADFun and nlminb tmbObjects
+asremlDBVSBV <- function(Y, fEffs, vEffs,
+                         verbose, strategy, data, ...) {
+
+  # Extract additional arguments from ...
+  args <- list(...)
+
+  # Check for additional arguments and validate them
+  if (!is.null(args$listXs)) stopifnot(is.list(args$listXs))
+  if (!is.null(args$listZs)) stopifnot(is.list(args$listZs))
+  if (!is.null(args$listVCov)) stopifnot(is.list(args$listVCov))
+
+  # Set arguments parameters, include additional arguments from ...
+  funArgs <- c(list(Y = Y,
+                    fEffs = fEffs,
+                    vEffs = vEffs,
+                    verbose = verbose,
+                    data = data),args) # Include additional arguments passed via ...
+
+  # Set conditions
+  if (strategy == "sole_only") {
+    out <- do.call(uv_lmmASREML, funArgs)
+  } else if (strategy %in% c("inter_only", "inter_only_ctrl")) {
+    out <- do.call(mvn_lmmASREML, funArgs)
+  } else if (strategy %in% c("sole_inter_ctrl", "sole_inter_50")) {
+    out <- do.call(uv_mvn_lmmASREML, funArgs)
+  } else {
+    stop("Invalid strategy")
+  }
+
+  return(out)
+}
+
+```
+
+
+```{r}
+launchStrat <- function(strategy, simulId, simulDir, scenarioName, 
+                        outDir, verbose, asreml=asreml, tmb=tmb, inferWithK=inferWithK){
+  
+  stratDir <- file.path(simulDir, strategy)
+  if(dir.exists(stratDir))
+    unlink(stratDir, recursive=TRUE)
+  dir.create(stratDir)
+  
+  inF <- file.path(outDir, "simul",  scenarioName, simulId, strategy, "outAll.rds")
+  if(! file.exists(inF))
+    next
+  outAll <- readRDS(inF)
+  listXs <- outAll$listXs
+  listZs <- outAll$listZs
+  listVCov <- outAll$listVCov
+  
+  kinship <- readRDS(file.path(outDir, "simul", "kinship.rds"))
+  listVCov <-  list(K = kinship$K_f, Kmix = listVCov[["Kmix"]])
+  
+  # print(listVCov$Kmix[1:5, 1:5])
+  
+  if(inferWithK==FALSE){
+    K_ID <- diag(nrow(kinship$K))
+    rownames(K_ID) <- rownames(kinship$K)
+    colnames(K_ID) <- colnames(kinship$K)
+    kinship$K <- K_ID
+  }
+  
+  Y <- TMBInputData(outAll, strategy)
+  out <- tmbDBVSBV(Y, listXs, listZs, listVCov, dllID = NULL, verbose = FALSE, coef.fixed=T,
+                   silent = TRUE, strategy, REML = TRUE, inferWithK = inferWithK)
+  saveRDS(out, file = file.path(outDir, "infer", scenarioName, simulId, 
+                                strategy, "out_tmb.rds"))
+  
+  if(asreml){
+    asremlData <- loadASRemlData(outAll, strategy)
+    Y <- asremlData$Y
+    fEffs <- asremlData$fEffs
+    vEffs <- asremlData$vEffs
+    data <- asremlData$data
+    listVCov <-  list(K = kinship$K)
+    out <- asremlDBVSBV(Y, fEffs, vEffs, verbose=F, listVCov=listVCov, strategy, data)
+    saveRDS(out, file = file.path(outDir, "infer", scenarioName, simulId,
+                                  strategy, "out_asreml.rds"))
+
+  }
+  
+}
+```
+
+
+# Infer
+
+```{r}
+for(scenarioName in scenariosToRun){
+  scenarioDir <- file.path(inferDir, scenarioName)
+  if(dir.exists(scenarioDir))
+    unlink(scenarioDir, recursive=TRUE)
+  dir.create(scenarioDir )
+  simulsToRun <- list.dirs(file.path(outDir, "simul", scenarioName),
+                           full.names = FALSE, recursive = FALSE)
+  if(!is.null(nbSimulsToRun))
+    simulsToRun = sprintf("simul%03d", 1:nbSimulsToRun)
+  
+  for(simulId in simulsToRun){
+    stopifnot(simulId%in%simulsToRun)
+    launchSimul(scenarioName, scenarioDir, simulId, strategiesToRun)
+  }
+}
+```
+
+# Appendix
+
+```{r info}
+t1 <- proc.time(); t1 - t0
+print(sessionInfo(), locale=FALSE)
+```

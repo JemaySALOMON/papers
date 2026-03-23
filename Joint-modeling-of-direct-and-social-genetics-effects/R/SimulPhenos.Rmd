@@ -1,0 +1,503 @@
+---
+title: "paper: simulation"
+author: "J. Salomon, J. Enjalbert, T. Flutre"
+date: "`r format(Sys.time(), '%d/%m/%Y %H:%M:%S')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    number_sections: TRUE
+  pdf_document:
+    toc: true
+    toc_depth: 4
+    number_sections: TRUE
+abstract: |
+    This documents aims to simulate data for the article 'Joint modeling of direct and social genetic effects in mono-genotypic and pluri-specific groups: case study in intercrops'
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+<!--
+This R chunk, hidden in the output, is used to set up important options.
+-->
+```{r, echo=FALSE}
+if(! "params" %in% ls())
+  params <- list(root.dir=NULL)
+suppressPackageStartupMessages(library(knitr))
+opts_chunk$set(echo=TRUE, warning=TRUE, message=TRUE, cache=FALSE,
+               fig.align="center", dev="svglite", root.dir=params$root.dir)
+opts_knit$set(progress=TRUE, verbose=TRUE)
+```
+
+
+# Preamble
+
+```{r}
+projectDir <- here::here("Joint-modeling-of-direct-and-social-genetics-effects")
+# projectDir <- here::here("../") #choose your path
+stopifnot(dir.exists(projectDir))
+
+srcDir <- file.path(projectDir, "src")
+stopifnot(dir.exists(srcDir))
+
+rDir <- file.path(projectDir, "R")
+stopifnot(dir.exists(rDir))
+```
+
+Dependencies:
+
+```{r}
+pkgs  <- c(
+  "MASS", "dplyr", "gtools", "ggplot2", "future.apply",
+  "mvtnorm", "MixMatrix", "Matrix", "seriation", "TMB",
+  "corpcor", "data.table", "doParallel", "agricolae",
+  "grid", "tidyr", "ggExtra", "here", "remotes", "scrm",
+  "ggpubr", "plotly", "data.table", "devtools", "pak", 
+  "rutilstimflutre", "svglite")
+
+for(pkg in pkgs)
+  suppressPackageStartupMessages(library(pkg, character.only=TRUE))
+source(file.path(srcDir, "utils.R"))
+```
+
+Execution time (see the appendix):
+```{r time_0}
+t0 <- proc.time()
+```
+
+# Prepare the simulations
+
+This script aims to simulate three types of experimental design ("strategies") for interspecific mixed crops using wheat and pea as species models, considering several parameter combinations ("scenarios").
+
+Steps:
+
+1. define several scenarios (choices of values for genetic variances, etc) and several strategies (sole_only, sole_inter_50, inter_only etc)
+
+2. for each scenario, simulate the explanatory factors (breeding values, block effects) several times with a different seed, *independently of the strategies*
+
+## Dimensions
+
+Plant material:
+
+```{r}
+W <- 200 # number of wheat genotypes
+P <- 2   # number of pea genotypes
+levWheats <- sprintf("wheat%02d", 1:W) # creates names for W wheat genotypes 
+levPeas <- sprintf("pea%02d", 1:P) # creates names for P pea genotypes 
+
+levSpecies <- c("wheat", "pea")
+levStand <- c("pure", "mixed")
+nbBlocks <- 2
+levBlocks <- LETTERS[1:nbBlocks]
+levContrast <- c("mu", "block1")
+```
+
+## Default parameters
+
+Default parameters of any scenario:
+
+```{r}
+debug <- TRUE
+
+dfltParams <- list()
+
+dfltParams$levSpecies <- levSpecies
+dfltParams$panelGenos <- levWheats
+dfltParams$testerGenos <- levPeas
+dfltParams$nbBlocks <- nbBlocks
+
+dfltParams$nbSimuls <- 100
+
+if(debug) # for debugging purposes
+  dfltParams$nbSimuls <- 2
+
+dfltParams$simulIds <- sprintf("simul%03d", 1:dfltParams$nbSimuls)
+dfltParams$mainSeed <- 123
+dfltParams$simulSeeds <- NA
+
+## fixed effects
+block1SpeciesEffs <- array(0,
+                           dim = c(length(levSpecies), 
+                                   length(levStand), 
+                                   length(levContrast)),
+                           dimnames = list(levContrast, 
+                                           levStand,levSpecies ))
+block1SpeciesEffs["mu",,"wheat"] <- c(65, 65*0.5) 
+block1SpeciesEffs["mu",,"pea"] <- c(30, 30*1)
+block1SpeciesEffs["block1",,"wheat"] <- c(1.3, -0.5)
+block1SpeciesEffs["block1",,"pea"] <- c(-0.7, 0.4)
+(dfltParams$block1SpeciesEffs = block1SpeciesEffs)
+
+## genetic BV of testers
+dfltParams$DBVSBVEffs = list("focal1" = 7, "neighbors1"= -2)
+
+## genetic variances
+dfltParams$CV_DBVw = 0.08
+(dfltParams$sigma2.DBVw = (dfltParams$CV_DBVw*block1SpeciesEffs["mu","pure","wheat"])^2)
+dfltParams$prop_sigma2.SBVw = 0.20 # in terms of sigma_DBVw
+dfltParams$sigma2.DBVp = 4.5^2
+dfltParams$prop_sigma2.DBV.SBV.pw = 0.0 # in terms of sigma2.DBVp
+dfltParams$prop_sigma2.DBV.SBV.wp = 0.0 # in terms of sigma_DBVw
+dfltParams$prop_sigma2.SIGVw = 0.10 # in terms of sigma_DBVw
+dfltParams$h2_sole_only = 0.7 # will allow to deduce sigma2.err_wheat in pur
+dfltParams$h2_DBVp = 0.7 # will allow to deduce sigma2.err_pea
+dfltParams$sigma2_err_w = NA # see below
+dfltParams$sigma2_err_p = NA # see below
+dfltParams$sigma2_err_w_mix = NA # see below
+dfltParams$sigma2_err_p_mix = NA # see below
+dfltParams$sigma2.cBVw = NA
+# dfltParams$T2 = 0.7 # will allow to deduce sigma2.err_wheat in mix
+dfltParams$prop_T2 = 1 # in term of h2_sole_only
+
+## cor and cov
+dfltParams$cor_DBVw_SBVw = 0.8
+dfltParams$cor_DBV_x_SBV = 0
+dfltParams$cor_E = -0.2
+dfltParams$cor_cBVw_GMAw = NA
+dfltParams$cor_cBVw_DBVw = NA
+
+## design
+propinter_onlytester1 = 0.5
+propsole_inter_50tester1 = 0.5
+
+
+```
+
+
+## Scenarios
+
+```{r}
+scenarios <- list(
+  "S1"=list(prop_sigma2.SIGVw=0.10),
+  "S2"=list(prop_sigma2.SIGVw=0.20),
+  "S3"=list(prop_sigma2.SIGVw=0.30),
+  "S4"=list(prop_sigma2.SIGVw=0.40),
+  "S5"=list(prop_sigma2.SIGVw=0.50))
+
+if(debug)
+  scenarios <- scenarios[1]
+scenarioIds <- names(scenarios)
+```
+
+## Field trials/strategies (see the **Simulations of field trials** section in the paper)
+
+* sole_only: only solecrops (SC)
+
+* inter_only: only intercrops (IC)
+
+* sole_inter_50: 50% of SC + 50% of IC
+
+```{r}
+strategies <- c("sole_only", "sole_inter_50", "inter_only")
+```
+
+## Set from the command-line
+
+```{r}
+for(i in seq_along(params$rmd.params))
+  assign(names(params$rmd.params)[i], params$rmd.params[[i]])
+```
+
+
+# Useful functions
+
+## Update scenario parameters
+
+```{r}
+updateScenarioParams <- function(dfltParams, scenarios, scenarioIdx){
+  
+  #params to change
+  paramsToChange <- scenarios[[scenarioIdx]]
+  stopifnot(all(names(paramsToChange) %in% names(dfltParams)))
+  
+  out <- dfltParams
+  
+  ## draw the seeds specific of the scenario
+  out$mainSeed <- dfltParams$mainSeed + scenarioIdx
+  set.seed(out$mainSeed)
+  out$simulSeeds <- sample.int(n=1e3, size=out$nbSimuls)
+  names(out$simulSeeds) <- out$simulIds
+  
+  ## change the default values for some parameters:
+  paramNames <- c("block1SpeciesEffs", "DBVSBVEffs",
+                  "sigma2.DBVw", "prop_sigma2.SBVw",
+                  "sigma2.DBVp", "prop_sigma2.DBV.SBV.pw",
+                  "prop_sigma2.DBV.SBV.wp", "prop_sigma2.SIGVw",
+                  "h2_sole_only", "h2_DBVp","cor_E", "cor_DBV_x_SBV", 
+                  "cor_DBVw_SBVw", "CV_DBVw","sigma2_err_w_mix",
+                  "sigma2_err_p_mix", "sigma2_err_p",
+                  "sigma2.cBVw", "prop_T2", "sigma2.TBVw")
+  
+  for(paramName in paramNames){
+    if(! paramName %in% names(paramsToChange)){
+      out[[paramName]] <- dfltParams[[paramName]]
+    } else{
+      out[[paramName]] <- paramsToChange[[paramName]]
+    }
+  }
+  
+  ## deduce the values of some parameters:
+  out$T2 <- out$prop_T2 * out$h2_sole_only #h2 in mix
+  
+  sigma2.DBVw  <- (out$CV_DBVw*out$block1SpeciesEffs["mu","pure","wheat"])^2
+  out$sigma2.SBVw <- out$prop_sigma2.SBVw * sigma2.DBVw 
+  
+  out$sigma2.DBV.SBV.pw <- out$prop_sigma2.DBV.SBV.pw * out$sigma2.DBVp
+  out$sigma2.DBV.SBV.wp <- out$prop_sigma2.DBV.SBV.wp * sigma2.DBVw
+  out$sigma2.DBVw <- sigma2.DBVw 
+  
+  out$sigma2.SIGVw <- out$prop_sigma2.SIGVw * sigma2.DBVw 
+  out$sigma2.cBVw <- out$sigma2.DBVw + out$sigma2.SIGVw
+  
+  out$sigma2_err_p <- getSigma2Err(out$sigma2.DBVp, out$h2_DBVp, dfltParams$nbBlocks)
+  out$sigma2_err_w <- getSigma2Err(out$sigma2.cBVw , out$h2_sole_only, dfltParams$nbBlocks)
+  
+  out$cov_DBV_x_SBV <- out$cor_DBV_x_SBV * sqrt(out$sigma2.DBV.SBV.pw) * sqrt(out$sigma2.DBV.SBV.wp)
+  out$sigma2.DBV_x_SBV <- out$sigma2.DBV.SBV.pw +  out$sigma2.DBV.SBV.wp + 2*out$cov_DBV_x_SBV
+  
+  
+  out$cov_DBVw_SBVw <- out$cor_DBVw_SBVw * sqrt(out$sigma2.DBVw) * sqrt(out$sigma2.SBVw)
+  out$sigma2.TBVw <- out$sigma2.DBVw + 2 * out$cov_DBVw_SBVw + out$sigma2.SBVw
+  
+  out$sigma2_err_w_mix = getSigma2Err(out$sigma2.TBVw , out$T2, dfltParams$nbBlocks)
+  out$sigma2_err_p_mix =  getSigma2Err(out$sigma2.DBVp, out$h2_DBVp, dfltParams$nbBlocks)
+  
+  out$cor_cBVw_DBVw = out$sigma2.DBVw/(sqrt(out$sigma2.cBVw*out$sigma2.DBVw))
+  
+  out$cor_cBVw_GMAw =(out$sigma2.DBVw+out$cov_DBVw_SBVw)/(sqrt(out$sigma2.cBVw*(out$sigma2.DBVw+
+                                                                                  out$sigma2.SBVw+
+                                                                                  2*out$cov_DBVw_SBVw)))
+  return(out)
+}
+```
+
+# Simulate data
+
+## Paths
+
+```{r}
+outDir <- file.path(projectDir, "paper")
+if(! dir.exists(outDir))
+  dir.create(outDir)
+
+mainSimulDir <- file.path(outDir, "simul")
+if(! dir.exists(mainSimulDir))
+  dir.create(mainSimulDir)
+```
+
+
+## Scenarios
+
+Do NOT launch this in parallel because `set.seed` is used inside `updateScenarioParams()`!
+
+```{r}
+paramsScenarios <- list()
+for(i in seq_along(scenarios)){
+  scenarioId <- scenarioIds[i]
+  scenarioDir <- file.path(mainSimulDir, scenarioId)
+  if(dir.exists(scenarioDir))
+    unlink(scenarioDir, recursive=TRUE)
+  dir.create(scenarioDir)
+  paramsScenario <- updateScenarioParams(dfltParams, scenarios, i)
+  paramsScenarios[[scenarioId]] <- paramsScenario
+  outF <- file.path(scenarioDir, "paramsScenario.rds")
+  saveRDS(paramsScenario, outF)
+}
+
+# paramsScenarios$S1$simulSeeds
+```
+
+
+## Genotypes
+
+### SNP genotypes for wheats
+
+`Genetic parameters`
+```{r}
+set.seed(12345)
+level_mig_rate <- "med" #structure
+
+genomes <- simulGenos(nb_genos = W, nb_chroms = 10, chrom_len=10^5,
+                      Ne=10^4, mut=10^(-8), rec=10^(-8),
+                      nb_pops=10, level_mig_rate = level_mig_rate,
+                      ind.ids = paramsScenario$panelGenos,
+                      verbose=1)
+
+dim(genomes$genos)
+M <- genomes$genos
+M[1:4,1:6]
+```
+
+`Genetic structure`
+```{r}
+level_mig_rate <- "med"
+M[1:4, 1:5]
+
+out_pca <- pca(M)
+
+plotPca(rotation=out_pca$rot.dat,
+        prop.vars=out_pca$prop.vars,
+        main=paste0("PCA (migration= ", level_mig_rate, ")"))
+
+
+afs <- estimSnpAf(M)
+plotHistAllelFreq(afs=afs,
+                  main=paste0("Allele frequencies (migration=",
+                              level_mig_rate, ")"))
+
+mafs <- estimSnpMaf(M)
+plotHistMinAllelFreq(mafs=mafs,
+                     main=paste0("Minor allele frequencies (migration=",
+                                 level_mig_rate, ")"))
+## estimate additive genetic relationships => NOIA
+Kwheat_noia <- estimGenRel(M, afs=afs, relationships="additive",
+                      method="noia", verbose=0)
+hist(diag(Kwheat_noia),
+     breaks="FD",
+     main=paste0("Inbreeding coefficients (migration=",
+                 level_mig_rate, ")"))
+
+Kwheat_noia_ord <- seriate(Kwheat_noia)
+pimage(Kwheat_noia, Kwheat_noia_ord,
+       main=paste0("Additive genetic relationships (migration=",
+                   level_mig_rate, ")"))
+
+Kwheat =  nearPD(Kwheat_noia)$mat
+Kwheat<- as.matrix(Kwheat)
+hist(diag(Kwheat),
+     breaks="FD",
+     main=paste0("Inbreeding coefficients (migration=",
+                 level_mig_rate, ")"))
+
+```
+
+`estim DL`
+
+```{r}
+# it can take some times
+outF <- file.path(rDir, "snps_DL.png")
+
+if(!file.exists(outF)){
+  ## subset SNPs
+  min.maf <- 0.15
+  length(snps.tokeep <- rownames(genomes$snp.coords[mafs >= min.maf,]))
+  
+  ## LD estimator of Mangin et al
+  system.time(out_LD <- estimLd(X=genomes$genos[,snps.tokeep],
+                                snp.coords=genomes$snp.coords[snps.tokeep,],
+                                use.ldcorsv = TRUE))
+  dim(out_LD)
+  head(out_LD)
+  summary(out_LD$r2)
+  
+  #############
+  out_LD$dist <- distSnpPairs(snp.pairs=out_LD[, c("loc1","loc2")],
+                              snp.coords=genomes$snp.coords[snps.tokeep, ])
+  
+  length(idx <- which(out_LD$dist <= 10^4))
+  png(filename = outF, width = 12, height = 9, units = "in", res = 600)
+  plotLd(x=out_LD$dist[idx], y=out_LD$r2[idx], xlab="Physical distance (in bp)")
+  dev.off()
+  message("Saved plot")
+} else {
+  message("read plot")
+  knitr::include_graphics(outF)
+}
+```
+
+```{r}
+Kwheat[1:5, 1:5]
+stopifnot(colnames(Kwheat)==rownames(Kwheat))
+stopifnot(colnames(Kwheat)==dfltParams$panelGenos)
+corpcor::is.positive.definite(Kwheat)
+Kpea <- diag(2)
+
+rownames(Kpea) <- dfltParams$testerGenos
+colnames(Kpea) <- dfltParams$testerGenos
+
+Kpea[1:2, 1:2]
+stopifnot(colnames(Kpea)==rownames(Kpea))
+corpcor::is.positive.definite(Kpea)
+tmp <- kronecker(Kwheat, Kpea, make.dimnames = TRUE)
+Kmix <- diag(nrow(Kwheat)*nrow(Kpea))
+rownames(Kmix) <- gsub(":", "_", rownames(tmp))
+colnames(Kmix) <- gsub(":", "_", colnames(tmp))
+
+kinship <- list(K_f = Kwheat,
+               Kmix = Kmix)
+outF <- file.path(mainSimulDir, "kinship.rds")
+saveRDS(kinship, outF)
+
+head(kinship$K_f[1:5, 1:5])
+head(kinship$Kmix[1:5, 1:5])
+```
+
+
+## Explanatory factors
+
+```{r}
+for(scenarioId in scenarioIds){
+  paramsScenario <- paramsScenarios[[scenarioId]]
+  scenarioDir <- file.path(mainSimulDir, scenarioId)
+  for(simulId in paramsScenario$simulIds){
+    simulDir <- file.path(scenarioDir, simulId)
+    if(dir.exists(simulDir))
+      unlink(simulDir, recursive=TRUE)
+    dir.create(simulDir)
+    suppressWarnings(
+    explFacts <- simulExplFactors(paramsScenario, kinship, simulId))
+    outF <- file.path(simulDir, "explFacts.rds")
+    saveRDS(explFacts, outF)
+  }
+}
+```
+
+
+## Simul phenotypes
+
+```{r}
+scenariosSimul <- function(scenarioId) {
+  paramsScenario <- paramsScenarios[[scenarioId]]
+  scenarioDir <- file.path(mainSimulDir, scenarioId)
+  
+  lapply(paramsScenario$simulIds, function(simulId) {
+    simulDir <- file.path(scenarioDir, simulId)
+    
+    lapply(strategies, function(strategy) {
+      stratDir <- file.path(simulDir, strategy)
+      if (dir.exists(stratDir))
+        unlink(stratDir, recursive=TRUE)
+      dir.create(stratDir)
+      outDesign <- simulDesign(strategies = strategy,
+                               panelGenos = paramsScenario$panelGenos,
+                               testerGenos = paramsScenario$testerGenos,
+                               propsole_onlypur = 1,
+                               propsole_inter_50pur = 1,
+                               propinter_onlytester1 =  propinter_onlytester1, 
+                               propsole_inter_50tester1 = propsole_inter_50tester1,
+                               block = 2, seed = 2566)
+      
+      inF <- file.path(simulDir, "explFacts.rds")
+      explFacts <- readRDS(inF)
+      
+      outAll <- simulPhenos(paramsScenario, explFacts, outDesign, strategy, simulId)
+      outF <- file.path(stratDir, "outAll.rds")
+      saveRDS(outAll, outF)
+    })
+  })
+}
+
+tmp <-lapply(scenarioIds, scenariosSimul)
+rm(tmp)
+# gc()
+```
+
+
+# Appendix
+
+```{r info}
+print(sessionInfo(), locale=FALSE)
+t1 <- proc.time(); t1 - t0
+```
