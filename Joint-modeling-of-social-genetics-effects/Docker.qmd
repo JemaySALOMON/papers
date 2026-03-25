@@ -1,9 +1,9 @@
 ---
-title: "Using lab-01 image to reproduce the analysis in the article: 'Joint modeling
-  of direct and social genetic effects in mono-genotypic and pluri-specific groups:
-  case study in intercrops'"
+title: "Using lab-01 image to reproduce the analysis in the article: 'Joint modeling 
+        of social genetic effects in mono- and pluri-specific groups: case study in 
+        intercrops'"
 author: "J. Salomon"
-date: "March 19, 2026" 
+date: "March 25, 2026" 
 format:
   html:
     code-copy: true
@@ -11,7 +11,7 @@ format:
 
 # Overview
 
-A prebuilt Docker image containing R, all required packages, and system dependencies
+A prebuilt a Docker image (**lab-01**) containing R, all required packages, and system dependencies
 needed to reproduce the analyses in this repository is available on DockerHub.
 
 
@@ -34,6 +34,7 @@ docker info
 # 3. Pull the prebuilt image
 
 Pull the image from DockerHub (this image is public — normally, no Docker Hub account is required to pull it): 
+
 ```bash
 docker pull jemaysalomon/lab-01:0.1.12
 ```

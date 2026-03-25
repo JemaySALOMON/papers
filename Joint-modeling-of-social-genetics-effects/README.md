@@ -1,5 +1,5 @@
 ---
-title: "README for the article: 'Joint modeling of direct and social genetic effects in mono-genotypic and pluri-specific groups: case study in intercrops'"
+title: "README for the article: 'Joint modeling of social genetic effects in mono- and pluri-specific groups: case study in intercrops'"
 author: "J. Salomon"
 date: "19/03/2026"
 ---
@@ -7,7 +7,7 @@ date: "19/03/2026"
 # Overview
 This repository contains supplementary information and code for the article:
 
-**"Joint modeling of direct and social genetic effects in mono-genotypic and pluri-specific groups: case study in intercrops"**.
+**"Joint modeling of social genetic effects in mono- and pluri-specific groups: case study in intercrops"**.
 
 It includes simulation, inference, and plotting scripts to reproduce the main figures in the article.
 
@@ -29,7 +29,6 @@ The `src/` folder contains functions and compiled code for inference:
 
 - `utils.R` and `utils.hpp` – Utility functions.
 - `MMTMB.hpp` and `MMTMB.cpp` – Core C++ implementation for the model.
-- `MMTMB.o` and `MMTMB.so` – Compiled object and shared library files.
 
 
 # data folder(`data/`)
@@ -75,6 +74,7 @@ This script generates the plots for the considered scenarios.
 
 **Note:** Parameters and file paths may need to be adjusted to match the specific scenarios, as the same script is used to produce the main figures of the article.
 
+
 ## Using Docker
 
-For experienced users familiar with Docker and CLI, I've prebuilt an  **r-lab** image for use in Docker containers. Everything is already installed. See the **Docker.pdf** file for instructions.
+For experienced users familiar with Docker and CLI, I've prebuilt an  **lab-01** image for use in Docker containers. Everything is already pre-installed. See the **Docker.pdf** file for instructions.

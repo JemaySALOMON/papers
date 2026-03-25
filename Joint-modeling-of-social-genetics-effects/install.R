@@ -2,6 +2,10 @@
 
 if (!requireNamespace("svglite", quietly = TRUE)){
   install.packages("svglite")}
+#Bio-conductor
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+#   install.packages("BiocManager")
+# BiocManager::install("BiocVersion")
 
 pkgs  <- c(
   "MASS", "dplyr", "gtools", "ggplot2", "future.apply",
@@ -22,3 +26,4 @@ lapply(pkgs, if_missing)
 
 if (!requireNamespace("rutilstimflutre", quietly = TRUE)){
   devtools::install_github("timflutre/rutilstimflutre")}
+

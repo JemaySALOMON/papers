@@ -42,8 +42,7 @@ First `inference.Rmd` should be executed.
 
 
 ```{r}
-projectDir <- here::here("Joint-modeling-of-direct-and-social-genetics-effects")  #choose your path
-# projectDir <- here::here("../")
+projectDir <- here::here("../") #=> choose your workdir
 stopifnot(dir.exists(projectDir))
 srcDir <- file.path(projectDir, "src")
 stopifnot(dir.exists(srcDir))
