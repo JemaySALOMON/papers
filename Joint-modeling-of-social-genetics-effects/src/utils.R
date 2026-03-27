@@ -1143,16 +1143,16 @@ MMTMB <- function(Y, listXs, listZs, listVCov, listBs = NULL,
 
   vcat("checking input...")
   dllID = "MMTMB"
-  if(Sys.info()[["sysname"]] == "Windows"){
-    TMB::compile(
-      file = file.path(srcDir, paste0(dllID, ".cpp")),
-      flags = "-g -O1",
-      DLLFLAGS = ""
-    )
-  } else {
-    FLAGSX <- '-g -O0 -Wall'
-    try(dyn.unload(file.path(srcDir, TMB::dynlib(dllID))), silent = TRUE)
-    if (!file.exists(file.path(srcDir, paste0(dllID, .Platform$dynlib.ext)))) {
+  try(dyn.unload(file.path(srcDir, TMB::dynlib(dllID))), silent = TRUE)
+  if (!file.exists(file.path(srcDir, paste0(dllID, .Platform$dynlib.ext)))) {
+    if(Sys.info()[["sysname"]] == "Windows"){
+      FLAGSX = '-g -O1'
+      TMB::compile(
+        file = file.path(srcDir, paste0(dllID, ".cpp")),
+        flags = FLAGSX,
+        DLLFLAGS = "")
+    } else {
+      FLAGSX = '-g -O0 -Wall'
       TMB::compile(
         file=file.path(srcDir, paste0(dllID, ".cpp")),
         flags = FLAGSX)
@@ -1433,16 +1433,16 @@ lmmTMB <- function(Y, listXs,listZs, listVCov,
 
   #Compilation condions
   dllID = "MMTMB"
-  if(Sys.info()[["sysname"]] == "Windows"){
-    TMB::compile(
-      file = file.path(srcDir, paste0(dllID, ".cpp")),
-      flags = "-g -O1",
-      DLLFLAGS = ""
-    )
-  } else {
-    FLAGSX <- '-g -O0 -Wall'
-    try(dyn.unload(file.path(srcDir, TMB::dynlib(dllID))), silent = TRUE)
-    if (!file.exists(file.path(srcDir, paste0(dllID, .Platform$dynlib.ext)))) {
+  try(dyn.unload(file.path(srcDir, TMB::dynlib(dllID))), silent = TRUE)
+  if (!file.exists(file.path(srcDir, paste0(dllID, .Platform$dynlib.ext)))) {
+    if(Sys.info()[["sysname"]] == "Windows"){
+      FLAGSX = '-g -O1'
+      TMB::compile(
+        file = file.path(srcDir, paste0(dllID, ".cpp")),
+        flags = FLAGSX,
+        DLLFLAGS = "")
+    } else {
+      FLAGSX = '-g -O0 -Wall'
       TMB::compile(
         file=file.path(srcDir, paste0(dllID, ".cpp")),
         flags = FLAGSX)

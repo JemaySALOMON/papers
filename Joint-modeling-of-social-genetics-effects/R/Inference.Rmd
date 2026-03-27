@@ -103,18 +103,6 @@ if(debug){
 }
 ```
 
-```{r}
-# for windows users
-if(Sys.info()[["sysname"]] == "Windows"){
-dllID = "MMTMB"
-  TMB::compile(
-    file = file.path(srcDir, paste0(dllID, ".cpp")),
-    flags = "-g -O1",
-    DLLFLAGS = ""
-  )
-}
-```
-
 # Paths
 
 ```{r}
