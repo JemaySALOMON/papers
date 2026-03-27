@@ -337,10 +337,10 @@ for (scenarioName in scenariosToRun) {
         # LinearIdx
         # tppIdxSoleMix <- binaryClassif(
         #   IdxMixSole(data, colGenos = "genotypes", colDBV = "True_DBV",
-        #              colSBV = "True_SBV", colSIGV = "True_SIS",
+        #              colSBV = "True_SBV", colSIGV = "True_SIGV",
         #              propToKeep = propToKeep, w_sole = w_sole)[["boolVec"]],
         #   IdxMixSole(data, colGenos = "genotypes", colDBV = "Estimated_DBV",
-        #              colSBV = "Estimated_SBV", colSIGV = "Estimated_SIS",
+        #              colSBV = "Estimated_SBV", colSIGV = "Estimated_SIGV",
         #              propToKeep = propToKeep, w_sole = w_sole)[["boolVec"]])[["tpp"]]
         
         # Create a temporary dataframe for the current iteration

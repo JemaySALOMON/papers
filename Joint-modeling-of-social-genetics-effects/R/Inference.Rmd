@@ -185,12 +185,11 @@ launchSimul <- function(scenarioName, scenarioDir, simulId, strategiesToRun){
 #' Function to fit TMB model
 #'
 #' @param listXs : fixed effects formula
-#' @param fitWthSIS parameters to estimate SIS parameters
 #' @param Y  a list of dataset
 #' @param listZs  a list a incidence matrix
 #' @param listVCov  a list of var-cov matrix
 #' @param dllID specify the TMB dllID name (do not recommend)
-#' @param strategy specify the design type { pure-only, mix-only or pure & mix}
+#' @param strategy specify the design type { sc-only, ic-only or sc & ic}
 #' @return A list containing TMB::MakeADFun and nlminb tmbObjects
 tmbDBVSBV <- function(Y, listXs, listZs, listVCov, 
                       dllID, verbose, strategy, coef.fixed,

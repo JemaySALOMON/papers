@@ -1017,157 +1017,6 @@ formula <- function(strategy) {
 }
 
 
-##' Fit pure stand only
-lmmTMB <- function(Y, listXs,listZs, listVCov,
-                   dllID=NULL, contrasts = NULL,
-                   verbose = F, silent = T,
-                   REML=TRUE,Bayesian=FALSE, sampling=NULL,
-                   inferWithK = TRUE,
-                   log_lambda=NULL, coef.fixed = T,
-                   Bs=NULL,
-                   Pu=NULL, Pv = NULL, control = NULL){
-
-  requireNamespace(package="TMB")
-
-  # check bayesian control
-  if(Bayesian){
-    requireNamespace(package="tmbstan")
-    requireNamespace(package="rstan")
-    stopifnot(!is.null(sampling),
-              is.list(sampling))}
-
-  vcat <- function(...) if (verbose) message(...)
-
-  out <- NULL
-
-  #Compilation condions
-  dllID <- "MMTMB"
-  FLAGSX <- commandArgs(trailingOnly = TRUE)
-  if(length(FLAGSX) == 0) FLAGSX <- ""
-  try(dyn.unload(file.path(srcDir, TMB::dynlib(dllID))), silent = TRUE)
-  if (!file.exists(file.path(srcDir, paste0(dllID, .Platform$dynlib.ext)))) {
-    TMB::compile(
-      file=file.path(srcDir, paste0(dllID, ".cpp")),
-      flags = FLAGSX)
-  }
-  dyn.load(file.path(srcDir, TMB::dynlib(dllID)))
-  out$dllID <- dllID
-
-  # internal params
-  q = ncol(listZs[["Z_DBV"]])
-
-  listZs=asSparseMatrix(listZs, "dgCMatrix")
-
-  #add interactions conditional on splines matrix
-  if(is.null(Bs))
-    Bs <- as(as(as(matrix(0,1,1), "dMatrix"), "generalMatrix"), "TsparseMatrix")
-  if(is.null(Pu))
-    Pu <- as(as(as(matrix(0,1,1), "dMatrix"), "generalMatrix"), "TsparseMatrix")
-  if(is.null(Pv))
-    Pv <- as(as(as(matrix(0,1,1), "dMatrix"), "generalMatrix"), "TsparseMatrix")
-
-  if(is.null(control))
-    control[["sim_with_spats"]] <- 0
-
-  ## list of data
-  listData <- list(model= "lmm",
-                   Bs = Bs,
-                   Pu = Pu,
-                   Pv = Pv,
-                   sim_with_spats = control[["sim_with_spats"]],
-                   listZs=listZs,
-                   y=Y[["y"]],
-                   X = listXs[["X"]],
-                   A = listVCov[["K"]])
-
-  ## list of parameters
-  listPars <- list(beta=rep(0, ncol(listXs[["X"]])),
-                   u=rep(0, q),
-                   log_lambda_u = log(1),
-                   log_lambda_v = log(1),
-                   theta = rep(0, ncol(listData[["Bs"]])),
-                   log_sd_u=log(1),
-                   log_sd_e=log(1))
-
-  rands <- c("u")
-  if(REML)
-    rands <- union(rands, c("beta"))
-
-  if(ncol(listData$Bs)>1)
-    rands <- union(rands, c("theta"))
-
-
-  if(!inferWithK)
-    listData[["model"]] = "uv_lmm_Id" # dont use for now
-
-
-  vcat("Construct objective functions")
-  cat("model: ",listData[["model"]], "\n")
-  t0 <- proc.time()
-  obj <- TMB::MakeADFun(data=listData,
-                        parameters=listPars,
-                        random=rands,
-                        ## hessian=TRUE,
-                        DLL=basename(dllID),
-                        silent=silent)
-  t1 <- proc.time()
-
-  out$tmb_fit_time <- (t1-t0)[1]
-
-  vcat("Optimization...")
-  t0 <- proc.time()
-  fit <- nlminb(start=obj$par, objective=obj$fn, gradient=obj$gr, hessian=NULL)
-  t1 <- proc.time()
-  out$nlimb_optim_time <- (t1-t0)[1]
-
-  vcat("Preparing output...")
-  out$obj <- obj
-  fit$parfull <- obj$env$last.par.best
-  out$fit <- fit
-  out$coef.random  <-tmbExtract(out,
-                                dllID = dllID,
-                                params = c("u"),
-                                reNames = NULL,
-                                paramsType = "random",
-                                path = srcDir)
-  if(coef.fixed){
-    if(REML)
-      out$coef.fixed <-tmbExtract(out,
-                                  dllID = dllID,
-                                  params = c("beta"),
-                                  reNames = NULL,
-                                  paramsType = "random",
-                                  path = srcDir)
-    else
-      out$coef.fixed <-tmbExtract(out,
-                                  dllID = dllID,
-                                  params = "beta",
-                                  reNames = NULL,
-                                  paramsType = "paramsTmb",
-                                  path = srcDir)
-  }
-
-  if (Bayesian) {
-    vcat("Bayesian sampling...")
-    rstan::rstan_options(auto_write = FALSE)
-    sink("/dev/null")
-    mcmc <- tmbstan(f,
-                    chains = sampling$chains,
-                    iter = sampling$iter,
-                    control = sampling$control,
-                    init = sampling$init,
-                    open_progress = FALSE,
-                    verbose = FALSE,
-                    silent = TRUE,
-                    show_messages = FALSE)
-    sink()
-    out$mcmc <- mcmc
-  }
-
-  class(out) <- "MMTMB"
-  return(out)
-}
-
 
 ## @param capture output from \code{capture.output(nlminb(..., control=list("trace"=1)))}
 ## from plantmix (upcoming R package)
@@ -1246,15 +1095,32 @@ setMap <- function(listData, listPars, inMap=NULL){
   return(inMap)
 }
 
+##' Fit DBV-SBV models for interspecific mixtures. Only needed parameters to reproduce the paper analyses is described here. Other parameters can be used as default
+##'
+##' Fits DBV-SBV models for interspecific mixtures.
+##' @param Y named list of response variables (a matrix Y and, optionally, a vector y and a vector y_t)
+##' @param listX named list of design matrices for the fixed-effect explanatory factors (a matrix X_mix and, optionally, a matrix X and a matrix X_t)
+##' @param listZ named list of design matrices of random-effect explanatory factors
+##' @param listVCov named list of square, symmetric matrices used, after re-scaling, as variance-covariance matrices for the random-effect factors; named "K" for the BVs (DBVs and SBVs) and "Kmix" for the DBVxSBVs; these matrices must have dimnames (both rows and columns) coherent with the column names of the design matrices in \code{listZ}
+##' @param REML logical
+##' @param control named list of options (for advanced users)
+##' @param verbose verbosity level (True or FALSE)
+##' @param verbose silent(True or FALSE)
+##' @return list
+##' @author Jemay Salomon
+##' @export
 MMTMB <- function(Y, listXs, listZs, listVCov, listBs = NULL,
                   listPus = NULL, listPvs = NULL,
-                  dllID = NULL, contrasts = NULL ,verbose=F,
-                  silent = T, REML=TRUE,Bayesian=FALSE,
-                  sampling=NULL,inferWithK=NULL,
-                  sdrep=F,coef.fixed = F, coef.rand = F,
+                  dllID = NULL,verbose=F,
+                  silent = T, REML=TRUE,
+                  Bayesian=FALSE,
+                  sampling=NULL,
+                  inferWithK=NULL,
+                  sdrep=F,coef.fixed = F,
+                  coef.rand = F,
                   control = NULL){
 
-  # initialize the spatials data if null
+  # initialize
   if(is.null(listBs))
     listBs = list()
   if(is.null(listPus))
@@ -1277,14 +1143,23 @@ MMTMB <- function(Y, listXs, listZs, listVCov, listBs = NULL,
 
   vcat("checking input...")
 
-  if (is.null(dllID))
-    dllID <- "MMTMB"
-  try(dyn.unload(file.path(srcDir, TMB::dynlib(dllID))), silent = silent)
-  if (!file.exists(file.path(srcDir, paste0(dllID, ".so")))) {
-    TMB::compile(file.path(srcDir, paste0(dllID, ".cpp")), '-g -O0 -Wall', ramework = "TMBad")
+  dllID = "MMTMB"
+  if(Sys.info()[["sysname"]] == "Windows"){
+    TMB::compile(
+      file = file.path(srcDir, paste0(dllID, ".cpp")),
+      flags = "-g -O1",
+      DLLFLAGS = ""
+    )
+  } else {
+    FLAGSX <- '-g -O0 -Wall'
+    try(dyn.unload(file.path(srcDir, TMB::dynlib(dllID))), silent = TRUE)
+    if (!file.exists(file.path(srcDir, paste0(dllID, .Platform$dynlib.ext)))) {
+      TMB::compile(
+        file=file.path(srcDir, paste0(dllID, ".cpp")),
+        flags = FLAGSX)
+    }
   }
   dyn.load(file.path(srcDir, TMB::dynlib(dllID)))
-  # TMB::config(tmb.sparse_hessian_compress=1, DLL = dllID)
   out$dllID <- dllID
 
   #tester conditional
@@ -1313,17 +1188,16 @@ MMTMB <- function(Y, listXs, listZs, listVCov, listBs = NULL,
   if(!"Kmix" %in% names(listVCov))
     listVCov[["Kmix"]] <- matrix(0,1,1)
 
-  #add interactions conditional on splines matrix
   #SC
   if(!"Bs_SC_f" %in% names(listBs))
     listBs[["Bs_SC_f"]] <- as(as(as(matrix(0,1,1), "dMatrix"), "generalMatrix"), "TsparseMatrix")
   if(!"Bs_SC_t" %in% names(listBs))
     listBs[["Bs_SC_t"]] <- as(as(as(matrix(0,1,1), "dMatrix"), "generalMatrix"), "TsparseMatrix")
-   if(!"Pu_SC_f" %in% names(listPus))
+  if(!"Pu_SC_f" %in% names(listPus))
     listPus[["Pu_SC_f"]] <- as(as(as(matrix(0,1,1), "dMatrix"), "generalMatrix"), "TsparseMatrix")
   if(!"Pu_SC_t" %in% names(listPus))
     listPus[["Pu_SC_t"]] <- as(as(as(matrix(0,1,1), "dMatrix"), "generalMatrix"), "TsparseMatrix")
-   if(!"Pv_SC_f" %in% names(listPvs))
+  if(!"Pv_SC_f" %in% names(listPvs))
     listPvs[["Pv_SC_f"]] <- as(as(as(matrix(0,1,1), "dMatrix"), "generalMatrix"), "TsparseMatrix")
   if(!"Pv_SC_t" %in% names(listPvs))
     listPvs[["Pv_SC_t"]] <- as(as(as(matrix(0,1,1), "dMatrix"), "generalMatrix"), "TsparseMatrix")
@@ -1361,6 +1235,7 @@ MMTMB <- function(Y, listXs, listZs, listVCov, listBs = NULL,
   listZs=asSparseMatrix(listZs, "dgCMatrix")
 
   vcat("constructing TMB data and parameters...")
+
   ## list of data variables and parameter variables
   listData <- list(model = "MMTMB",
                    Y = Y$Y,
@@ -1398,14 +1273,14 @@ MMTMB <- function(Y, listXs, listZs, listVCov, listBs = NULL,
                    log_sd_DBV_x_SBV = rep(log(1), d),
                    unconstr_cor_DBV_x_SBV= rep(0, 1),
 
-                   # splines coefs
+                   # coefs
                    cs_SC_f = rep(0, ncol(listBs[["Bs_SC_f"]])),
                    cs_SC_t = rep(0, ncol(listBs[["Bs_SC_t"]])),
 
                    cs_IC_f = rep(0, ncol(listBs[["Bs_IC_f"]])),
                    cs_IC_t = rep(0, ncol(listBs[["Bs_IC_t"]])),
 
-                   # splines params
+                   # params
                    log_lambda_u_sc_f = log(1),
                    log_lambda_v_sc_f = log(1),
                    log_lambda_u_ic_f = log(1),
@@ -1517,6 +1392,181 @@ MMTMB <- function(Y, listXs, listZs, listVCov, listBs = NULL,
   return(out)
   # invisible(gc()) #free up memory
 }
+
+
+##' simple linear mixed model. Only needed parameters to reproduce the paper analyses is described here. Other parameters can be used as default
+##'
+##' @param Y named list of response variable (only y is needed)
+##' @param listX named list of design matrices for the fixed-effect explanatory factors (only X is needed)
+##' @param listZ named list of design matrices of random-effect explanatory factors (only one Z is needed)
+##' @param listVCov named list of square, symmetric matrices used, after re-scaling, as variance-covariance matrices for the random-effect factors; only "K" for the BVs in solecrop. these matrices must have dimnames (both rows and columns) coherent with the column names of the design matrices in \code{listZ}
+##' @param REML logical
+##' @param control named list of options (for advanced users)
+##' @param verbose verbosity level (True or FALSE)
+##' @param verbose silent(True or FALSE)
+##' @return list
+##' @author Jemay Salomon
+##' @export
+lmmTMB <- function(Y, listXs,listZs, listVCov,
+                   dllID=NULL,
+                   verbose = F, silent = T,
+                   REML=TRUE,Bayesian=FALSE,
+                   sampling=NULL,
+                   inferWithK = TRUE,
+                   log_lambda=NULL,
+                   coef.fixed = T,
+                   Bs=NULL,
+                   Pu=NULL, Pv = NULL,
+                   control = NULL){
+
+  requireNamespace(package="TMB")
+
+  # check bayesian control
+  if(Bayesian){
+    requireNamespace(package="tmbstan")
+    requireNamespace(package="rstan")
+    stopifnot(!is.null(sampling),
+              is.list(sampling))}
+
+  vcat <- function(...) if (verbose) message(...)
+
+  out <- NULL
+
+  #Compilation condions
+  dllID = "MMTMB"
+  if(Sys.info()[["sysname"]] == "Windows"){
+    TMB::compile(
+      file = file.path(srcDir, paste0(dllID, ".cpp")),
+      flags = "-g -O1",
+      DLLFLAGS = ""
+    )
+  } else {
+    FLAGSX <- '-g -O0 -Wall'
+    try(dyn.unload(file.path(srcDir, TMB::dynlib(dllID))), silent = TRUE)
+    if (!file.exists(file.path(srcDir, paste0(dllID, .Platform$dynlib.ext)))) {
+      TMB::compile(
+        file=file.path(srcDir, paste0(dllID, ".cpp")),
+        flags = FLAGSX)
+    }
+  }
+  dyn.load(file.path(srcDir, TMB::dynlib(dllID)))
+  out$dllID <- dllID
+
+  # internal params
+  q = ncol(listZs[["Z_DBV"]])
+
+  listZs=asSparseMatrix(listZs, "dgCMatrix")
+
+  #SC
+  if(is.null(Bs))
+    Bs <- as(as(as(matrix(0,1,1), "dMatrix"), "generalMatrix"), "TsparseMatrix")
+  if(is.null(Pu))
+    Pu <- as(as(as(matrix(0,1,1), "dMatrix"), "generalMatrix"), "TsparseMatrix")
+  if(is.null(Pv))
+    Pv <- as(as(as(matrix(0,1,1), "dMatrix"), "generalMatrix"), "TsparseMatrix")
+
+  if(is.null(control))
+    control[["sim_with_spats"]] <- 0
+
+  ## list of data
+  listData <- list(model= "lmm",
+                   Bs = Bs,
+                   Pu = Pu,
+                   Pv = Pv,
+                   sim_with_spats = control[["sim_with_spats"]],
+                   listZs=listZs,
+                   y=Y[["y"]],
+                   X = listXs[["X"]],
+                   A = listVCov[["K"]])
+
+  ## list of parameters
+  listPars <- list(beta=rep(0, ncol(listXs[["X"]])),
+                   u=rep(0, q),
+                   log_lambda_u = log(1),
+                   log_lambda_v = log(1),
+                   theta = rep(0, ncol(listData[["Bs"]])),
+                   log_sd_u=log(1),
+                   log_sd_e=log(1))
+
+  rands <- c("u")
+  if(REML)
+    rands <- union(rands, c("beta"))
+
+  if(ncol(listData$Bs)>1)
+    rands <- union(rands, c("theta"))
+
+
+  if(!inferWithK)
+    listData[["model"]] = "uv_lmm_Id" # dont use for now
+
+
+  vcat("Construct objective functions")
+  cat("model: ",listData[["model"]], "\n")
+  t0 <- proc.time()
+  obj <- TMB::MakeADFun(data=listData,
+                        parameters=listPars,
+                        random=rands,
+                        ## hessian=TRUE,
+                        DLL=basename(dllID),
+                        silent=silent)
+  t1 <- proc.time()
+
+  out$tmb_fit_time <- (t1-t0)[1]
+
+  vcat("Optimization...")
+  t0 <- proc.time()
+  fit <- nlminb(start=obj$par, objective=obj$fn, gradient=obj$gr, hessian=NULL)
+  t1 <- proc.time()
+  out$nlimb_optim_time <- (t1-t0)[1]
+
+  vcat("Preparing output...")
+  out$obj <- obj
+  fit$parfull <- obj$env$last.par.best
+  out$fit <- fit
+  out$coef.random  <-tmbExtract(out,
+                                dllID = dllID,
+                                params = c("u"),
+                                reNames = NULL,
+                                paramsType = "random",
+                                path = srcDir)
+  if(coef.fixed){
+    if(REML)
+      out$coef.fixed <-tmbExtract(out,
+                                  dllID = dllID,
+                                  params = c("beta"),
+                                  reNames = NULL,
+                                  paramsType = "random",
+                                  path = srcDir)
+    else
+      out$coef.fixed <-tmbExtract(out,
+                                  dllID = dllID,
+                                  params = "beta",
+                                  reNames = NULL,
+                                  paramsType = "paramsTmb",
+                                  path = srcDir)
+  }
+
+  if (Bayesian) {
+    vcat("Bayesian sampling...")
+    rstan::rstan_options(auto_write = FALSE)
+    sink("/dev/null")
+    mcmc <- tmbstan(obj,
+                    chains = sampling$chains,
+                    iter = sampling$iter,
+                    control = sampling$control,
+                    init = sampling$init,
+                    open_progress = FALSE,
+                    verbose = FALSE,
+                    silent = TRUE,
+                    show_messages = FALSE)
+    sink()
+    out$mcmc <- mcmc
+  }
+
+  class(out) <- "MMTMB"
+  return(out)
+}
+
 
 ##########     HELPER FUNCTIONS TO RENAME SIMULATION PARAMETERS     ############
 ##########                   IN INFERENCE                    ############
@@ -3154,87 +3204,3 @@ simulate.MMTMB <- function(object, nsim = 1, seed = NULL, ...) {
   ret
 }
 
-
-# ####################################################################################
-#########                   adapted from SpATS                          ###########
-# ####################################################################################
-
-#' Title
-#'
-#' Ref: spatialmodels for field trials
-#' @param x vecteur num
-#' @param xl min
-#' @param xr  max
-#' @param ndx  nseg
-#' @param bdeg degree
-#' @param pord
-mm.base <- function (x, xl, xr, ndx, bdeg, pord) {
-
-  if (ndx %% 1 != 0 || bdeg %% 1 != 0 || pord %% 1 != 0)
-    stop("ndx, bdeg, and pord must be integers")
-
-  ndx.new <- round(ndx)
-  ndx <- ndx.new
-  pord.new <-round(pord)
-  pord <- pord.new
-  bdeg.new <-round(bdeg)
-  bdeg <- bdeg.new
-
-  #  bbase-spline basis
-  dx <- (xr - xl)/ndx
-  knots <- seq(xl - bdeg*dx, xr + bdeg*dx, by=dx)
-  tpower <- function(x, t, p)((x - t) ^ p * (x > t))
-  P <- outer(x, knots, tpower, bdeg)
-  n <- dim(P)[2]
-  D <- diff(diag(n), diff = bdeg + 1) / (gamma(bdeg + 1) * dx ^ bdeg)
-  B <- (-1) ^ (bdeg + 1) * P %*% t(D)
-  m = ncol(B)
-  n = nrow(B)
-  D = diff(diag(m), differences=pord) #
-  P.svd = svd(crossprod(D))
-  U.Z = (P.svd$u)[,1:(m-pord)] # eigenvectors
-  d = (P.svd$d)[1:(m-pord)]  # eigenvalues
-  Z = B%*%U.Z
-  U.X = NULL
-
-  # Wood's 2013 |decomp=4 from spats
-  X = B%*%((P.svd$u)[,-(1:(m-pord))])
-  id.v <- rep(1, nrow(X))
-  D.temp = X - ((id.v%*%t(id.v))%*%X)/nrow(X)
-  Xf <- svd(crossprod(D.temp))$u[,ncol(D.temp):1]
-  X <- X%*%Xf
-  U.X = ((P.svd$u)[,-(1:(m-pord)), drop = FALSE])%*%Xf
-  list(X = X, Z = Z, d = d, B = B, m = m, D = D, knots = knots, U.X = U.X, U.Z = U.Z)
-}
-
-##' row-wise kronecker
-rwk <- function(x1, x2) {
-  one.1 <- matrix(1, 1, ncol(x1))
-  one.2 <- matrix(1, 1, ncol(x2))
-  kronecker(x1, one.2) * kronecker(one.1, x2)
-}
-
-## ' build 2d splines basis
-build.psplines2d <- function(x, y, nseg = c(nseg_x, nseg_y),
-                             pord = c(2, 2), degree = c(3, 3),
-                             nest.div = c(1, 1)){
-  x1 <- x
-  x2 <- y
-
-  MMu <- mm.base(x1, min(x1), max(x1), (nseg[1]/nest.div[1]), degree[1], pord[1])
-  MMv <- mm.base(x2, min(x2), max(x2), (nseg[2]/nest.div[2]), degree[2], pord[2])
-
-  Bu <- MMu$B
-  Bv <- MMv$B
-  Du <- MMu$D
-  Dv <- MMv$D
-
-  Bs <- rwk(Bv, Bu)
-  Bs <- as(as(as(Bs, "dMatrix"), "generalMatrix"), "TsparseMatrix")
-  Pu <- kronecker(diag(ncol(Dv)), t(Du) %*% Du)
-  Pv <- kronecker(t(Dv) %*% Dv, diag(ncol(Du)))
-  Pu <- as(as(as(Pu, "dMatrix"), "generalMatrix"), "TsparseMatrix")
-  Pv <- as(as(as(Pv, "dMatrix"), "generalMatrix"), "TsparseMatrix")
-
-  list(Pu=Pu, Pv=Pv, B=Bs, MMu=MMu, MMv=MMv)
-}

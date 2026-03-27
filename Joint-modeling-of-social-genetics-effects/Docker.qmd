@@ -11,7 +11,7 @@ format:
 
 # Overview
 
-A prebuilt a Docker image (**lab-01**) containing R, all required packages, and system dependencies
+A prebuilt Docker image (**lab-01**) containing R, all required packages, and system dependencies
 needed to reproduce the analyses in this repository is available on DockerHub.
 
 

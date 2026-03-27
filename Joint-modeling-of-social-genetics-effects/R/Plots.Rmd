@@ -40,7 +40,7 @@ opts_knit$set(progress=TRUE, verbose=TRUE)
 # Preamble
 
 ```{r}
-projectDir <- here::here("../") #=> choose your workdir
+projectDir <- here::here("") #=> choose your workdir
 stopifnot(dir.exists(projectDir))
 srcDir <- file.path(projectDir, "src")
 stopifnot(dir.exists(srcDir))
@@ -192,8 +192,8 @@ parameters["fitWith"] <- "TMB"
 parameters_designs = droplevels(parameters[parameters$Strategy %in%designs, ])
 parameters_designs$Strategy <- factor(parameters_designs$Strategy,levels = designs)
 
-selectionSIS <- droplevels(selection[selection$Scenario %in%propSIGVscenario, ])
-selectionSIS$propSIGV <- selectionSIS$Scenario
+selectionSIGV <- droplevels(selection[selection$Scenario %in%propSIGVscenario, ])
+selectionSIGV$propSIGV <- selectionSIGV$Scenario
 
 parametersSIGV <- droplevels(parameters[parameters$Scenario%in%propSIGVscenario, ])
 parametersSIGV$propSIGV <-parametersSIGV$Scenario
@@ -205,10 +205,10 @@ propSIGVval<- c("S4" = 0.1, "S5" = 0.20, "S6" = 0.30, "S7"=0.4, "S8"=0.5) # need
 parametersSIGV<- parametersSIGV %>%
   dplyr::mutate(propSIGV = dplyr::recode(propSIGV, !!!propSIGVval))
 parametersSIGV$propSIGV <- as.numeric(parametersSIGV$propSIGV)
-selectionSIS <- selectionSIS %>%
+selectionSIGV <- selectionSIGV %>%
   dplyr::mutate(propSIGV = dplyr::recode(propSIGV, !!!propSIGVval))
-selectionSIS$propSIGV <- as.numeric(selectionSIS$propSIGV)
-unique(selectionSIS$Scenario)
+selectionSIGV$propSIGV <- as.numeric(selectionSIGV$propSIGV)
+unique(selectionSIGV$Scenario)
 ```
 
 ```{r}
@@ -1304,7 +1304,7 @@ Proportion of top-performing genotypes (y-axis) selected for a targeted cropping
 
 
 ```{r}
-dat <- droplevels(selectionSIS[selectionSIS$Strategy%in%designs, ])
+dat <- droplevels(selectionSIGV[selectionSIGV$Strategy%in%designs, ])
 dat$Strategy <- factor(dat$Strategy, levels = c("sole_only", "sole_inter_50", "inter_only"))
 
 ```

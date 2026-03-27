@@ -20,10 +20,12 @@ Type MMTMB(objective_function<Type>* obj) {
   DATA_MATRIX(X);                                                    // Design matrix for fixed effects on solecrop
   SparseMatrix<Type> Z_DBV = listZs.getName("Z_DBV");                // Design matrix for randoms effects [n x q] DBV
   SparseMatrix<Type> Z_SIGV = listZs.getName("Z_SIGV");              // Design matrix for  randoms effects  [n x q] SIGV
-  //spatials data for focal plants | SC
+  
+  //extra params
   Eigen::SparseMatrix<Type> Bs_SC_f = listBs.getName("Bs_SC_f");
   Eigen::SparseMatrix<Type> Pu_SC_f = listPus.getName("Pu_SC_f");
   Eigen::SparseMatrix<Type> Pv_SC_f = listPvs.getName("Pv_SC_f");
+  
   //params
   PARAMETER(log_sd_e);                         
   PARAMETER(log_sd_sigv);  
@@ -39,7 +41,8 @@ Type MMTMB(objective_function<Type>* obj) {
   PARAMETER(log_sd_e_t);                          
   PARAMETER_VECTOR(beta_t);                                    // vector of fixed effects
   PARAMETER_VECTOR(cs_SC_t);
-  //spatials data for testers
+
+  //extra params
   Eigen::SparseMatrix<Type> Bs_SC_t = listBs.getName("Bs_SC_t");
   Eigen::SparseMatrix<Type> Pu_SC_t = listPus.getName("Pu_SC_t");
   Eigen::SparseMatrix<Type> Pv_SC_t = listPvs.getName("Pv_SC_t");
@@ -52,6 +55,7 @@ Type MMTMB(objective_function<Type>* obj) {
   SparseMatrix<Type> Z_BV = listZs.getName("Z_BV");           // Design matrix for random effects [n_1 x q],[DBV, SBV]
   SparseMatrix<Type> Z_SIGV_mix = listZs.getName("Z_SIGV_mix");                         // Design matrix for  randoms effects SIGV
   SparseMatrix<Type> Z_DBV_x_SBV = listZs.getName("Z_DBV_x_SBV");                       //  Design matrix for interactions effects (DBV_w x IGE_p) +( DBV_p x IGE_w)
+
   //intercropping parameters
   PARAMETER_MATRIX(B);                          // Matrix of fixed effects  [p x 2] on intercropping
   PARAMETER_ARRAY(BV);                          // Matrix of random effects [q x 2][DBV, SBV]
@@ -65,16 +69,18 @@ Type MMTMB(objective_function<Type>* obj) {
   DATA_MATRIX(A);                            // Variance-covariance matrix for genetics effects [kinship]
   DATA_MATRIX(Amix);                       //Variance-covariance matrix effects in mixed
 
-  //spatials data for focal plants | IC
+  //extra data/params
   Eigen::SparseMatrix<Type> Bs_IC_f = listBs.getName("Bs_IC_f");
   Eigen::SparseMatrix<Type> Pu_IC_f = listPus.getName("Pu_IC_f");
   Eigen::SparseMatrix<Type> Pv_IC_f = listPvs.getName("Pv_IC_f");
   PARAMETER_VECTOR(cs_IC_f);
-  //spatials data for testers plants | IC
+  
+  //extra data/params
   Eigen::SparseMatrix<Type> Bs_IC_t = listBs.getName("Bs_IC_t");
   Eigen::SparseMatrix<Type> Pu_IC_t = listPus.getName("Pu_IC_t");
   Eigen::SparseMatrix<Type> Pv_IC_t = listPvs.getName("Pv_IC_t");
   PARAMETER_VECTOR(cs_IC_t);
+  
   //params for focal+testers
   PARAMETER(log_lambda_u_ic_f);
   PARAMETER(log_lambda_v_ic_f);
@@ -82,7 +88,7 @@ Type MMTMB(objective_function<Type>* obj) {
   PARAMETER(log_lambda_u_ic_t);
   PARAMETER(log_lambda_v_ic_t);
 
-  //optional for SIMULATE with spatials
+  //extra data/params
   DATA_INTEGER(sim_with_spats);
   
   /*----------------------------Local variales -------------------*/
@@ -91,11 +97,13 @@ Type MMTMB(objective_function<Type>* obj) {
   int q = A.cols(); 
   int n = y.size();
   int n_t = y_t.size();
+  
   //lambdas focal
   Type lambda_u_sc_f = exp(log_lambda_u_sc_f);
   Type lambda_v_sc_f = exp(log_lambda_v_sc_f);
   Type lambda_u_ic_f = exp(log_lambda_u_ic_f);
   Type lambda_v_ic_f = exp(log_lambda_v_ic_f);
+  
   //lambda testers
   Type lambda_u_sc_t = exp(log_lambda_u_sc_t);
   Type lambda_v_sc_t = exp(log_lambda_v_sc_t);
@@ -124,7 +132,6 @@ Type MMTMB(objective_function<Type>* obj) {
     vec_sd_t.fill(exp(log_sd_e_t));
     nll += VECSCALE(mvn_y_cor_t, vec_sd_t)(y_t - m_t);
     REPORT(beta_t);
-    // contribution of the spatials effects | P-Splines
     if(mmtmb::isSparseValid(Bs_SC_t)){
       Eigen::SparseMatrix<Type> Q_SC_t(cs_SC_t.size(), cs_SC_t.size());
       Q_SC_t = lambda_u_sc_t * Pu_SC_t + lambda_v_sc_t * Pv_SC_t;
@@ -132,7 +139,7 @@ Type MMTMB(objective_function<Type>* obj) {
         Q_SC_t.coeffRef(k, k) += Type(1e-6);  
       }
       nll += GMRF(Q_SC_t)(cs_SC_t);
-      //simulate spatials effects
+      //simulate
       SIMULATE{
         GMRF(Q_SC_t).simulate(cs_SC_t_sim);
       }
@@ -164,7 +171,6 @@ Type MMTMB(objective_function<Type>* obj) {
   }
   nll += h_BV(BV);
   
-  // contribution of the spatials effects | P-Splines | IC
   vector<Type>cs_IC_f_sim (cs_IC_f.size());
   if(mmtmb::isSparseValid(Bs_IC_f)){
     Eigen::SparseMatrix<Type> Q_IC_f(cs_IC_f.size(), cs_IC_f.size());
@@ -173,7 +179,7 @@ Type MMTMB(objective_function<Type>* obj) {
       Q_IC_f.coeffRef(k, k) += Type(1e-6);  
     }
     nll += GMRF(Q_IC_f)(cs_IC_f);
-    //simulate spatials effects
+    //simulate
     SIMULATE{
       GMRF(Q_IC_f).simulate(cs_IC_f_sim);
     }
@@ -186,7 +192,6 @@ Type MMTMB(objective_function<Type>* obj) {
       Q_IC_t.coeffRef(k, k) += Type(1e-6);  
     }
     nll += GMRF(Q_IC_t)(cs_IC_t);
-    //simulate spatials effects
     SIMULATE{
       GMRF(Q_IC_t).simulate(cs_IC_t_sim);
     }
@@ -198,7 +203,6 @@ Type MMTMB(objective_function<Type>* obj) {
     vector<Type> cs_SC_f_sim(cs_SC_f.size());
     vector<Type> m(n);
     m  = X * beta + Z_DBV*DBV + Z_SIGV*SIGV;
-    //add spatial effects for focal
     if(mmtmb::isSparseValid(Bs_SC_f)){
       m += Bs_SC_f*cs_SC_f ;
     }
@@ -223,7 +227,6 @@ Type MMTMB(objective_function<Type>* obj) {
       h_SIGV.simulate(SIGV_sim);
       REPORT(SIGV_sim);
     }
-    // contribution of the spatials effects | P-Splines
     if(mmtmb::isSparseValid(Bs_SC_f)){
       Eigen::SparseMatrix<Type> Q_SC_f(cs_SC_f.size(), cs_SC_f.size());
       Q_SC_f = lambda_u_sc_f * Pu_SC_f + lambda_v_sc_f * Pv_SC_f;
@@ -231,7 +234,6 @@ Type MMTMB(objective_function<Type>* obj) {
         Q_SC_f.coeffRef(k, k) += Type(1e-6);  
       }
       nll += GMRF(Q_SC_f)(cs_SC_f);
-      //simulate spatials effects
       SIMULATE{
         GMRF(Q_SC_f).simulate(cs_SC_f_sim);
       }
@@ -382,7 +384,7 @@ Type lmm(objective_function<Type>* obj) {
   DATA_SPARSE_MATRIX(Pu);
   DATA_SPARSE_MATRIX(Pv);
 
-  //optional for SIMULATE with spatials
+  //extra data/params
   DATA_INTEGER(sim_with_spats);
   
   
@@ -400,7 +402,6 @@ Type lmm(objective_function<Type>* obj) {
   int q = u.size();                          // Number of random parameters
   Type lambda_u = exp(log_lambda_u);
   Type lambda_v = exp(log_lambda_v);
-  
   
   /*----------------------------Objective function-----------------------------*/
   Type nll = Type(0.0);                 // Initialize negative log-likelihood
@@ -425,7 +426,7 @@ Type lmm(objective_function<Type>* obj) {
   
   vector<Type>theta_sim(theta.size());
   if(mmtmb::isSparseValid(Bs)){
-    //Spline penalty via GMRF
+    //Penalty via GMRF
     Eigen::SparseMatrix<Type> Q(theta.size(), theta.size());
     Q = lambda_u * Pu + lambda_v * Pv;
     for(int k = 0; k < theta.size(); ++k) {

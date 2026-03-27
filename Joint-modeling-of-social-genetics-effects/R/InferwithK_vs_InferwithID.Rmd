@@ -42,7 +42,7 @@ opts_knit$set(progress=TRUE, verbose=TRUE)
 Paths:
 
 ```{r}
-projectDir <- here::here("../") #=> choose your workdir
+projectDir <- here::here("Joint-modeling-of-social-genetics-effects") #=> choose your workdir
 stopifnot(dir.exists(projectDir))
 srcDir <- file.path(projectDir, "src")
 stopifnot(dir.exists(srcDir))
@@ -151,7 +151,7 @@ dat.color <- "black"; size = 0.5
 
 ```{r, fig.width=16, fig.height=6, warning = FALSE}
 subTitle <- textGrob(
-  expression(var[SIS] == 0.5 * var[DBV] ~ "," ~
+  expression(var[SIGV] == 0.5 * var[DBV] ~ "," ~
              var[SBVw] == 0.2 * var[DBV] ~ "," ~
              cor[DBVw_SBVw] == -0.8),
   gp = gpar(fontsize = 14))

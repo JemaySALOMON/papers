@@ -53,7 +53,7 @@ pkgs  <- c(
   "mvtnorm", "MixMatrix", "Matrix", "seriation", "TMB",
   "corpcor", "data.table", "doParallel", "agricolae",
   "grid", "tidyr", "ggExtra", "here", "remotes", "scrm",
-  "ggpubr", "plotly", "data.table", "devtools", "pak", 
+  "ggpubr", "plotly", "data.table", "devtools", 
   "rutilstimflutre", "svglite")
 
 for(pkg in pkgs)
