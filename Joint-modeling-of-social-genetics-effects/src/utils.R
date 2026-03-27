@@ -1142,7 +1142,6 @@ MMTMB <- function(Y, listXs, listZs, listVCov, listBs = NULL,
   out <- NULL
 
   vcat("checking input...")
-
   dllID = "MMTMB"
   if(Sys.info()[["sysname"]] == "Windows"){
     TMB::compile(
