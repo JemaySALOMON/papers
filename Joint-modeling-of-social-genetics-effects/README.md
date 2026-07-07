@@ -12,8 +12,8 @@ This repository contains supplementary information and code for the article:
 It includes simulation, inference, and plotting scripts to reproduce the main figures in the article.
 
 # Supplementary Information
-- **suppl-S1.pdf**: Default parameters used for the simulations.
-- **suppl-S2.pdf**: Supplementary Table 1 and Supplementary Figures 1–12.
+- **File-S1.pdf**: Default parameters used for the simulations.
+- **File-S2.pdf**: Supplementary Table 1 and Supplementary Figures 1–12.
 
 # R folder (`R/`)
 The `R/` folder contains `.Rmd` files to run simulations, perform inference, gather results, and generate plots:
