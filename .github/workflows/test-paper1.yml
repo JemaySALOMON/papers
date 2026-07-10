@@ -85,6 +85,6 @@
       
       - name: Reproduce main figures of the papers 
         run: Rscript -e "rmarkdown::render('${{ env.PAPER_DIR }}/R/Plots.Rmd', output_dir='${{ env.PAPER_DIR }}/R')"
-
+        
       - name: Inference with K vs Inference with ID
         run: Rscript -e "rmarkdown::render('${{ env.PAPER_DIR }}/R/InferwithK_vs_InferwithID.Rmd', output_dir='${{ env.PAPER_DIR }}/R')" 
