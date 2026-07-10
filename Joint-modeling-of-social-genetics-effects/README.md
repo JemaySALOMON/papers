@@ -34,7 +34,6 @@ The `src/` folder contains functions and compiled code for inference:
 # data folder(`data/`)
 The `data/` folder contains simulated data for the main figures of the articles.
 
-
 # How to work with the scripts
 
 ## 1. Install Dependencies
